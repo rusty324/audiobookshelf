@@ -196,7 +196,11 @@ class FolderWatcher extends EventEmitter {
 
     if (!this.filesBeingAdded.has(path)) {
       this.filesBeingAdded.add(path)
-      this.waitForFileToAdd(path)
+      this.waitForFileToAdd(path).catch((error) => {
+        Logger.error(`[Watcher] Error waiting for file to add at "${path}"`, error)
+        this.pendingFileUpdates = this.pendingFileUpdates.filter((pfu) => pfu.path !== path)
+        this.filesBeingAdded.delete(path)
+      })
     }
   }
 
@@ -254,7 +258,7 @@ class FolderWatcher extends EventEmitter {
     }
     // Wait 3 seconds
     await new Promise((resolve) => setTimeout(resolve, 3000))
-    this.waitForFileToAdd(path, mtimeMs, ++loop)
+    return this.waitForFileToAdd(path, mtimeMs, ++loop)
   }
 
   /**
