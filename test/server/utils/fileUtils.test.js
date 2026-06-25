@@ -134,4 +134,54 @@ describe('fileUtils', () => {
       })
     })
   })
+
+  describe('formatSeriesSequence', () => {
+    it('zero-pads single-digit integer sequences', () => {
+      expect(fileUtils.formatSeriesSequence('1')).to.equal('01')
+      expect(fileUtils.formatSeriesSequence('9')).to.equal('09')
+      expect(fileUtils.formatSeriesSequence(3)).to.equal('03')
+    })
+
+    it('does not pad sequences >= 10', () => {
+      expect(fileUtils.formatSeriesSequence('10')).to.equal('10')
+      expect(fileUtils.formatSeriesSequence('12.5')).to.equal('12.5')
+      expect(fileUtils.formatSeriesSequence(100)).to.equal('100')
+    })
+
+    it('preserves the decimal portion when padding', () => {
+      expect(fileUtils.formatSeriesSequence('2.5')).to.equal('02.5')
+      expect(fileUtils.formatSeriesSequence('0.5')).to.equal('00.5')
+    })
+
+    it('returns non-numeric sequences unchanged', () => {
+      expect(fileUtils.formatSeriesSequence('Special')).to.equal('Special')
+    })
+
+    it('returns empty string for empty/null/undefined', () => {
+      expect(fileUtils.formatSeriesSequence('')).to.equal('')
+      expect(fileUtils.formatSeriesSequence(null)).to.equal('')
+      expect(fileUtils.formatSeriesSequence(undefined)).to.equal('')
+    })
+  })
+
+  describe('buildBookOrganizeRelParts', () => {
+    it('builds [author, series, "Book NN - title"] when a sequence is present', () => {
+      expect(
+        fileUtils.buildBookOrganizeRelParts({ authorName: 'Brandon Sanderson', seriesName: 'Mistborn', sequence: '2', title: 'The Well of Ascension' })
+      ).to.deep.equal(['Brandon Sanderson', 'Mistborn', 'Book 02 - The Well of Ascension'])
+    })
+
+    it('omits the "Book # - " prefix when the series has no sequence', () => {
+      expect(fileUtils.buildBookOrganizeRelParts({ authorName: 'Author', seriesName: 'Series', title: 'Title' })).to.deep.equal(['Author', 'Series', 'Title'])
+    })
+
+    it('builds [author, title] when there is no series', () => {
+      expect(fileUtils.buildBookOrganizeRelParts({ authorName: 'Author', title: 'Title' })).to.deep.equal(['Author', 'Title'])
+    })
+
+    it('returns empty-string segments for missing author so callers can filter them', () => {
+      expect(fileUtils.buildBookOrganizeRelParts({ seriesName: 'Series', sequence: '1', title: 'Title' })).to.deep.equal(['', 'Series', 'Book 01 - Title'])
+      expect(fileUtils.buildBookOrganizeRelParts({ title: 'Title' })).to.deep.equal(['', 'Title'])
+    })
+  })
 })

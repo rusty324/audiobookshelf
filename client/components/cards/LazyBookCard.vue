@@ -572,6 +572,12 @@ export default {
           text: this.$strings.ButtonReScan
         })
       }
+      if (this.userIsAdminOrUp && !this.isPodcast) {
+        items.push({
+          func: 'organizeIntoFolder',
+          text: this.$strings.ButtonOrganizeFilesIntoFolders
+        })
+      }
       if (this.series && this.bookMount) {
         items.push({
           func: 'removeSeriesFromContinueListening',
@@ -785,6 +791,36 @@ export default {
         .finally(() => {
           this.processing = false
         })
+    },
+    organizeIntoFolder() {
+      if (this.processing) return
+      const payload = {
+        message: this.$strings.MessageConfirmOrganizeFilesIntoFolders,
+        callback: (confirmed) => {
+          if (!confirmed) return
+          this.processing = true
+          const axios = this.$axios || this.$nuxt.$axios
+          axios
+            .$post(`/api/items/${this.libraryItemId}/organize`)
+            .then((data) => {
+              if (data.result === 'NOCHANGE') {
+                this.$toast.info(this.$strings.ToastItemOrganizeNoChange)
+              } else {
+                this.$toast.success(this.$strings.ToastItemOrganizeSuccess)
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to organize library item', error)
+              const errorMsg = error.response?.data || this.$strings.ToastItemOrganizeFailed
+              this.$toast.error(errorMsg)
+            })
+            .finally(() => {
+              this.processing = false
+            })
+        },
+        type: 'yesNo'
+      }
+      this.store.commit('globals/setConfirmPrompt', payload)
     },
     showEditModalFiles() {
       // More menu func

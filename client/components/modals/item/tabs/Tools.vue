@@ -48,6 +48,20 @@
       </widgets-alert>
     </div>
 
+    <!-- Organize into folders -->
+    <div class="w-full border border-black-200 p-4 my-8">
+      <div class="flex flex-wrap items-center">
+        <div>
+          <p class="text-lg">{{ $strings.ButtonOrganizeFilesIntoFolders }}</p>
+          <p class="max-w-sm text-sm pt-2 text-gray-300">{{ $strings.LabelToolsOrganizeFilesIntoFoldersDescription }}</p>
+        </div>
+        <div class="grow" />
+        <div>
+          <ui-btn :loading="organizing" @click.stop="organizeIntoFolder">{{ $strings.ButtonOrganizeFilesIntoFolders }}</ui-btn>
+        </div>
+      </div>
+    </div>
+
     <p v-if="!mediaTracks.length" class="text-lg text-center my-8">{{ $strings.MessageNoAudioTracks }}</p>
   </div>
 </template>
@@ -62,7 +76,9 @@ export default {
     }
   },
   data() {
-    return {}
+    return {
+      organizing: false
+    }
   },
   computed: {
     libraryItemId() {
@@ -119,6 +135,35 @@ export default {
                 console.error('Audio metadata encode failed', error)
               })
           }
+        },
+        type: 'yesNo'
+      }
+      this.$store.commit('globals/setConfirmPrompt', payload)
+    },
+    organizeIntoFolder() {
+      if (this.organizing) return
+      const payload = {
+        message: this.$strings.MessageConfirmOrganizeFilesIntoFolders,
+        callback: (confirmed) => {
+          if (!confirmed) return
+          this.organizing = true
+          this.$axios
+            .$post(`/api/items/${this.libraryItemId}/organize`)
+            .then((data) => {
+              if (data.result === 'NOCHANGE') {
+                this.$toast.info(this.$strings.ToastItemOrganizeNoChange)
+              } else {
+                this.$toast.success(this.$strings.ToastItemOrganizeSuccess)
+              }
+            })
+            .catch((error) => {
+              console.error('Failed to organize library item', error)
+              const errorMsg = error.response?.data || this.$strings.ToastItemOrganizeFailed
+              this.$toast.error(errorMsg)
+            })
+            .finally(() => {
+              this.organizing = false
+            })
         },
         type: 'yesNo'
       }
