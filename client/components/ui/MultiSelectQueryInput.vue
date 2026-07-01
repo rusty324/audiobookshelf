@@ -4,10 +4,31 @@
     <div ref="wrapper" class="relative">
       <form @submit.prevent="submitForm">
         <div ref="inputWrapper" role="list" style="min-height: 36px" class="flex-wrap relative w-full shadow-xs flex items-center border border-gray-600 rounded-sm px-2 py-0.5" :class="wrapperClass" @click.stop.prevent="clickWrapper" @mouseup.stop.prevent @mousedown.prevent>
-          <div v-for="item in selected" :key="item.id" role="listitem" class="rounded-full px-2 py-0.5 m-0.5 text-xs bg-bg flex flex-nowrap whitespace-nowrap items-center justify-center relative min-w-12">
-            <div v-if="!disabled" class="w-full h-full rounded-full absolute top-0 left-0 opacity-0 hover:opacity-100 px-1 bg-bg/75 flex items-center justify-end cursor-pointer" :class="{ 'opacity-100': inputFocused }">
-              <button v-if="showEdit" type="button" :aria-label="$strings.ButtonEdit" class="material-symbols text-base text-white hover:text-warning focus:text-warning mr-1" @click.stop="editItem(item)" @keydown.enter.stop.prevent="editItem(item)" @focus="setInputFocused(true)" @blur="setInputFocused(false)" tabindex="0">edit</button>
-              <button type="button" :aria-label="$strings.ButtonRemove" class="material-symbols text-white hover:text-error focus:text-error" style="font-size: 1.1rem" @click.stop="removeItem(item.id)" @keydown.enter.stop="removeItem(item.id)" @focus="setInputFocused(true)" @blur="setInputFocused(false)" tabindex="0">close</button>
+          <div v-for="(item, index) in selected" :key="item.id" role="listitem" class="rounded-full px-2 py-0.5 m-0.5 text-xs bg-bg flex flex-nowrap whitespace-nowrap items-center justify-center relative" :class="orderable ? 'min-w-20' : 'min-w-12'">
+            <div v-if="!disabled" class="w-full h-full rounded-full absolute top-0 left-0 opacity-0 hover:opacity-100 px-1 bg-bg/75 flex items-center cursor-pointer" :class="[orderable && selected.length > 1 ? 'justify-between' : 'justify-end', { 'opacity-100': inputFocused }]">
+              <div v-if="orderable && selected.length > 1" class="flex items-center">
+                <button type="button" :aria-label="$strings.ButtonMoveUp" :disabled="index === 0" class="material-symbols text-white hover:text-success focus:text-success disabled:text-gray-500 disabled:hover:text-gray-500" style="font-size: 1.1rem" @click.stop="moveItemUp(index)" @keydown.enter.stop="moveItemUp(index)" @focus="setInputFocused(true)" @blur="setInputFocused(false)" tabindex="0">
+                  keyboard_arrow_up
+                </button>
+                <button
+                  type="button"
+                  :aria-label="$strings.ButtonMoveDown"
+                  :disabled="index === selected.length - 1"
+                  class="material-symbols text-white hover:text-success focus:text-success disabled:text-gray-500 disabled:hover:text-gray-500"
+                  style="font-size: 1.1rem"
+                  @click.stop="moveItemDown(index)"
+                  @keydown.enter.stop="moveItemDown(index)"
+                  @focus="setInputFocused(true)"
+                  @blur="setInputFocused(false)"
+                  tabindex="0"
+                >
+                  keyboard_arrow_down
+                </button>
+              </div>
+              <div class="flex items-center">
+                <button v-if="showEdit" type="button" :aria-label="$strings.ButtonEdit" class="material-symbols text-base text-white hover:text-warning focus:text-warning mr-1" @click.stop="editItem(item)" @keydown.enter.stop.prevent="editItem(item)" @focus="setInputFocused(true)" @blur="setInputFocused(false)" tabindex="0">edit</button>
+                <button type="button" :aria-label="$strings.ButtonRemove" class="material-symbols text-white hover:text-error focus:text-error" style="font-size: 1.1rem" @click.stop="removeItem(item.id)" @keydown.enter.stop="removeItem(item.id)" @focus="setInputFocused(true)" @blur="setInputFocused(false)" tabindex="0">close</button>
+              </div>
             </div>
             {{ item[textKey] }}
           </div>
@@ -54,6 +75,7 @@ export default {
     disabled: Boolean,
     readonly: Boolean,
     showEdit: Boolean,
+    orderable: Boolean,
     textKey: {
       type: String,
       default: 'name'
@@ -285,6 +307,18 @@ export default {
       this.$nextTick(() => {
         this.recalcMenuPos()
       })
+    },
+    moveItemUp(index) {
+      if (index <= 0) return
+      const arr = this.selected.slice()
+      arr.splice(index - 1, 0, arr.splice(index, 1)[0])
+      this.$emit('input', arr)
+    },
+    moveItemDown(index) {
+      if (index >= this.selected.length - 1) return
+      const arr = this.selected.slice()
+      arr.splice(index + 1, 0, arr.splice(index, 1)[0])
+      this.$emit('input', arr)
     },
     insertNewItem(item) {
       if (!this.selected.find((i) => i.name === item.name)) this.selected.push(item)
