@@ -1,0 +1,6 @@
+# Core dependencies — required for parsing, lookups, and the test suite.
+# These are pure/light and install cleanly on CPU-only machines (no GPU).
+ebooklib>=0.18
+beautifulsoup4>=4.12
+lxml>=4.9
+pysbd>=0.3

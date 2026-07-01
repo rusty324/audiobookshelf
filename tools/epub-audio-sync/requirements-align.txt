@@ -1,0 +1,14 @@
+# Alignment dependencies — only needed to run the `sync` command.
+#
+# Aeneas is a CPU-only forced aligner (MFCC + dynamic time warping); it does
+# NOT require a GPU. It does require system packages installed BEFORE pip:
+#
+#   Debian/Ubuntu:
+#     sudo apt-get install ffmpeg espeak espeak-data libespeak-dev \
+#         libespeak1 python3-dev build-essential
+#
+# numpy must be importable before `pip install aeneas` (aeneas builds a C
+# extension against it), so install it first.
+-r requirements.txt
+numpy>=1.24
+aeneas>=1.7.3
