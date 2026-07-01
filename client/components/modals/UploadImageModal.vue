@@ -56,7 +56,7 @@ export default {
   },
   methods: {
     init() {},
-    fileUploadSelected() {
+    fileUploadSelected(file) {
       this.previewUpload = URL.createObjectURL(file)
       this.selectedFile = file
     },
