@@ -177,9 +177,18 @@ class ApiKeyController {
    * @param {Response} res
    */
   async delete(req, res) {
-    const apiKey = await Database.apiKeyModel.findByPk(req.params.id)
+    const apiKey = await Database.apiKeyModel.findByPk(req.params.id, {
+      include: {
+        model: Database.userModel
+      }
+    })
     if (!apiKey) {
       return res.sendStatus(404)
+    }
+    // Only root user can delete root user API keys
+    if (apiKey.user?.type === 'root' && !req.user.isRoot) {
+      Logger.warn(`[ApiKeyController] delete: Root user API key cannot be deleted by non-root user`)
+      return res.sendStatus(403)
     }
 
     await apiKey.destroy()

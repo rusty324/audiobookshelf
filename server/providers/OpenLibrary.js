@@ -96,6 +96,9 @@ class OpenLibrary {
         errorCode: 404
       }
     }
+    if (!Array.isArray(lookupData.docs)) {
+      return []
+    }
     var searchDocs = await Promise.all(lookupData.docs.map((d) => this.cleanSearchDoc(d)))
     return searchDocs
   }
@@ -113,6 +116,9 @@ class OpenLibrary {
       return {
         errorCode: 404
       }
+    }
+    if (!Array.isArray(lookupData.docs)) {
+      return []
     }
     var searchDocs = await Promise.all(lookupData.docs.map((d) => this.cleanSearchDoc(d)))
     return searchDocs

@@ -85,7 +85,7 @@ class ShareController {
           index: audioFile.index,
           startOffset,
           duration: audioFile.duration,
-          title: audioFile.metadata.filename || '',
+          title: audioFile.metadata?.filename || '',
           contentUrl: `${global.RouterBasePath}/public/share/${slug}/track/${audioFile.index}`,
           mimeType: audioFile.mimeType,
           codec: audioFile.codec || null,
@@ -198,7 +198,11 @@ class ShareController {
     if (!audioTrack) {
       return res.status(404).send('Track not found')
     }
-    const audioTrackPath = audioTrack.metadata.path
+    const audioTrackPath = audioTrack.metadata?.path
+    if (!audioTrackPath) {
+      Logger.error(`[ShareController] Invalid audio track "${audioTrack.index}" for share session "${playbackSession.id}"`)
+      return res.sendStatus(500)
+    }
 
     if (global.XAccel) {
       const encodedURI = encodeUriPath(global.XAccel + audioTrackPath)

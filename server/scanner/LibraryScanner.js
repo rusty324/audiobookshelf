@@ -457,7 +457,9 @@ class LibraryScanner {
 
     if (this.pendingFileUpdatesToScan.length) {
       Logger.debug(`[LibraryScanner] File updates finished scanning with more updates in queue (${this.pendingFileUpdatesToScan.length})`)
-      this.scanFilesChanged(...this.pendingFileUpdatesToScan.shift())
+      this.scanFilesChanged(...this.pendingFileUpdatesToScan.shift()).catch((error) => {
+        Logger.error(`[LibraryScanner] Error scanning queued file changes`, error)
+      })
     }
   }
 

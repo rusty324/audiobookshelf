@@ -313,7 +313,7 @@ class SessionController {
     }
 
     const user = await Database.userModel.getUserById(playbackSession.userId)
-    Logger.debug(`[SessionController] Serving audio track ${audioTrack.index} for session "${req.params.id}" belonging to user "${user.username}"`)
+    Logger.debug(`[SessionController] Serving audio track ${audioTrack.index} for session "${req.params.id}" belonging to user "${user?.username}"`)
 
     if (global.XAccel) {
       const encodedURI = encodeUriPath(global.XAccel + audioTrack.metadata.path)
