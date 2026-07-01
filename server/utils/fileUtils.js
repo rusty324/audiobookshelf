@@ -576,3 +576,50 @@ async function copyToExisting(srcPath, destPath) {
   })
 }
 module.exports.copyToExisting = copyToExisting
+
+/**
+ * Format a series sequence for use in a folder name.
+ * Left-pads the integer part to two digits when the sequence is a number less than 10,
+ * preserving any decimal portion. Non-numeric sequences are returned unchanged.
+ * e.g. "1" -> "01", "9" -> "09", "10" -> "10", "2.5" -> "02.5", "Special" -> "Special"
+ *
+ * @param {string|number} sequence
+ * @returns {string}
+ */
+function formatSeriesSequence(sequence) {
+  if (sequence === null || sequence === undefined || sequence === '') return ''
+  const sequenceStr = String(sequence)
+  const num = parseFloat(sequenceStr)
+  if (isNaN(num) || num >= 10) return sequenceStr
+
+  const [intPart, ...rest] = sequenceStr.split('.')
+  const sign = intPart.startsWith('-') ? '-' : ''
+  const digits = sign ? intPart.slice(1) : intPart
+  const paddedInt = `${sign}${digits.padStart(2, '0')}`
+  return rest.length ? `${paddedInt}.${rest.join('.')}` : paddedInt
+}
+module.exports.formatSeriesSequence = formatSeriesSequence
+
+/**
+ * Build the (unsanitized) relative path parts for organizing a book into
+ * [author]/[series]/[title] folders. The title folder is prefixed with "Book # - "
+ * when a series sequence is present.
+ * The caller is responsible for filtering empty parts and sanitizing each part
+ * (see MiscController.handleUpload).
+ *
+ * @param {{ authorName?:string, seriesName?:string, sequence?:string|number, title?:string }} params
+ * @returns {string[]} ordered path parts, e.g. ["Author", "Series", "Book 02 - Title"]
+ */
+function buildBookOrganizeRelParts({ authorName, seriesName, sequence, title } = {}) {
+  const author = (authorName || '').trim()
+  const series = (seriesName || '').trim()
+  const bookTitle = (title || '').trim()
+
+  if (series) {
+    const formattedSequence = formatSeriesSequence(sequence)
+    const titleFolder = formattedSequence ? `Book ${formattedSequence} - ${bookTitle}` : bookTitle
+    return [author, series, titleFolder]
+  }
+  return [author, bookTitle]
+}
+module.exports.buildBookOrganizeRelParts = buildBookOrganizeRelParts

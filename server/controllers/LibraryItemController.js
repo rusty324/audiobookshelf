@@ -10,7 +10,8 @@ const Database = require('../Database')
 const zipHelpers = require('../utils/zipHelpers')
 const { reqSupportsWebp, clampPositiveInt } = require('../utils/index')
 const { ScanResult, AudioMimeType } = require('../utils/constants')
-const { getAudioMimeTypeFromExtname, encodeUriPath } = require('../utils/fileUtils')
+const { getAudioMimeTypeFromExtname, encodeUriPath, filePathToPOSIX, isSameOrSubPath, sanitizeFilename, buildBookOrganizeRelParts } = require('../utils/fileUtils')
+const Watcher = require('../Watcher')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
 const AudioFileScanner = require('../scanner/AudioFileScanner')
 const Scanner = require('../scanner/Scanner')
@@ -53,6 +54,33 @@ function ensureUserCanAccessLibraryItemsForBatch(req, res, libraryItems) {
     }
   }
   return true
+}
+
+/**
+ * Remove empty directories walking up from startDir, stopping before stopDir.
+ * Used after an organize move to clean up emptied [author]/[series] folders.
+ *
+ * @param {string} startDir POSIX path to start from
+ * @param {string} stopDir POSIX path that must not be removed or crossed above
+ */
+async function removeEmptyParentDirs(startDir, stopDir) {
+  let dir = startDir
+  while (dir && dir !== stopDir && dir.length > stopDir.length && isSameOrSubPath(stopDir, dir)) {
+    let entries = null
+    try {
+      entries = await fs.readdir(dir)
+    } catch (error) {
+      break
+    }
+    if (entries.length) break
+    try {
+      await fs.remove(dir)
+    } catch (error) {
+      Logger.warn(`[LibraryItemController] organize: Failed to remove empty dir "${dir}"`, error)
+      break
+    }
+    dir = filePathToPOSIX(Path.dirname(dir))
+  }
 }
 
 class LibraryItemController {
@@ -868,6 +896,113 @@ class LibraryItemController {
     await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
     res.json({
       result: Object.keys(ScanResult).find((key) => ScanResult[key] == result)
+    })
+  }
+
+  /**
+   * POST: /api/items/:id/organize
+   * Move a book's files into a canonical [author]/[series]/[title] folder, creating
+   * folders as needed, then re-sync the database. The title folder is prefixed with
+   * "Book # - " when the (first) series has a sequence.
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async organize(req, res) {
+    if (!req.user.isAdminOrUp) {
+      Logger.error(`[LibraryItemController] Non-admin user "${req.user.username}" attempted to organize library item`)
+      return res.sendStatus(403)
+    }
+    if (!req.libraryItem.isBook) {
+      Logger.error(`[LibraryItemController] organize: Only book library items can be organized`)
+      return res.sendStatus(400)
+    }
+
+    const book = req.libraryItem.media
+    const primarySeries = book.series?.[0]
+    const relParts = buildBookOrganizeRelParts({
+      authorName: book.authorName,
+      seriesName: primarySeries?.name,
+      sequence: primarySeries?.bookSeries?.sequence,
+      title: book.title
+    })
+    const cleanedParts = relParts.filter(Boolean).map((part) => sanitizeFilename(part))
+    if (!cleanedParts.length) {
+      Logger.error(`[LibraryItemController] organize: Could not build a target path for "${book.title}" (missing author/series/title)`)
+      return res.status(400).send('Not enough metadata to organize this item')
+    }
+
+    // Resolve the library folder this item lives in to build the absolute target path
+    const library = await Database.libraryModel.findByIdWithFolders(req.libraryItem.libraryId)
+    const folder = library?.libraryFolders.find((f) => f.id === req.libraryItem.libraryFolderId)
+    if (!folder) {
+      Logger.error(`[LibraryItemController] organize: Library folder not found for item "${req.libraryItem.id}"`)
+      return res.sendStatus(500)
+    }
+    const folderPath = filePathToPOSIX(folder.path)
+
+    const newRelPath = filePathToPOSIX(Path.join(...cleanedParts))
+    const newPath = filePathToPOSIX(Path.join(folderPath, newRelPath))
+    const oldPath = filePathToPOSIX(req.libraryItem.path)
+    const isFile = req.libraryItem.isFile
+
+    // Already organized (e.g. already in an author folder) -> nothing to do
+    if (!isFile && newPath === oldPath) {
+      return res.json({ result: 'NOCHANGE', libraryItem: req.libraryItem.toOldJSON() })
+    }
+
+    // For a single-file item the destination is the file inside the new folder
+    const destFilePath = isFile ? filePathToPOSIX(Path.join(newPath, Path.basename(oldPath))) : null
+
+    // Collision guard: never overwrite an existing destination that isn't this item
+    const collisionTarget = isFile ? destFilePath : newPath
+    if (collisionTarget !== oldPath && (await fs.pathExists(collisionTarget))) {
+      Logger.error(`[LibraryItemController] organize: Target already exists "${collisionTarget}"`)
+      return res.status(409).send('A file or folder already exists at the target location')
+    }
+
+    const oldParentDir = filePathToPOSIX(Path.dirname(oldPath))
+
+    Logger.info(`[LibraryItemController] organize: Moving "${oldPath}" to "${isFile ? destFilePath : newPath}"`)
+    Watcher.addIgnoreDir(oldPath)
+    Watcher.addIgnoreDir(newPath)
+    try {
+      if (isFile) {
+        await fs.ensureDir(newPath)
+        await fs.move(oldPath, destFilePath, { overwrite: false })
+      } else {
+        await fs.move(oldPath, newPath, { overwrite: false })
+      }
+    } catch (error) {
+      Logger.error(`[LibraryItemController] organize: Failed to move files for "${book.title}"`, error)
+      Watcher.removeIgnoreDir(oldPath)
+      Watcher.removeIgnoreDir(newPath)
+      return res.status(500).send('Failed to move files')
+    }
+
+    // Best-effort cleanup of now-empty old parent directories (never above the library folder)
+    await removeEmptyParentDirs(oldParentDir, folderPath)
+
+    // Re-sync the database record and all file/media paths from the new location
+    const result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id, {
+      path: newPath,
+      relPath: newRelPath,
+      libraryFolderId: folder.id,
+      isFile: false
+    })
+    await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
+
+    Watcher.removeIgnoreDir(oldPath)
+    Watcher.removeIgnoreDir(newPath)
+
+    const libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
+    if (libraryItem) {
+      SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+    }
+
+    res.json({
+      result: Object.keys(ScanResult).find((key) => ScanResult[key] == result),
+      libraryItem: libraryItem?.toOldJSON()
     })
   }
 
