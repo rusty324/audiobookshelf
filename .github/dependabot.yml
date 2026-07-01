@@ -1,0 +1,33 @@
+version: 2
+updates:
+  # Server (root) npm dependencies
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      # Bundle minor/patch updates into a single PR to reduce noise;
+      # major updates are raised as individual PRs so each can be tested in isolation.
+      server-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Client (Nuxt/Vue) npm dependencies
+  - package-ecosystem: npm
+    directory: /client
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      client-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions workflow versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
