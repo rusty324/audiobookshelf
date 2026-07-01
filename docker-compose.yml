@@ -1,7 +1,12 @@
 ### EXAMPLE DOCKER COMPOSE ###
 services:
   audiobookshelf:
-    image: ghcr.io/advplyr/audiobookshelf:latest
+    # Build the image from this repository's Dockerfile (this fork's code)
+    # instead of pulling the prebuilt upstream image. Run `docker compose up
+    # --build` (or `docker compose build`) to (re)build after code changes.
+    build:
+      context: .
+    image: audiobookshelf:local
     # ABS runs on port 13378 by default. If you want to change
     # the port, only change the external port, not the internal port
     ports:
