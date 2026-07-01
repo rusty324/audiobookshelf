@@ -4,6 +4,7 @@ from epub_audio_sync.epub_parser import (
     build_fragments,
     normalize_whitespace,
     split_sentences,
+    to_iso2,
 )
 from epub_audio_sync.aligner import _clip_to_ms, parse_smil
 
@@ -45,6 +46,21 @@ def test_split_then_build_roundtrip():
     canonical, frags = build_fragments(split_sentences(text))
     for f in frags:
         assert canonical[f.char_start:f.char_end] == f.text
+
+
+def test_to_iso2_mapping():
+    assert to_iso2("eng") == "en"
+    assert to_iso2("DEU") == "de"
+    assert to_iso2("fr") == "fr"       # already 2-letter, passed through
+    assert to_iso2("xyz") == "en"      # unknown -> English default
+    assert to_iso2("") == "en"
+
+
+def test_split_sentences_unsupported_language_falls_back():
+    # pysbd has no "xx" rules; the splitter must fall back to English rules
+    # instead of raising.
+    sentences = split_sentences("One sentence. Another one.", language="xx")
+    assert sentences == ["One sentence.", "Another one."]
 
 
 def test_clip_to_ms_formats():

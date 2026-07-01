@@ -179,7 +179,9 @@ def align(
     from aeneas.task import Task
 
     audio_abs = os.path.abspath(audio_path)
-    audio_ref = os.path.basename(audio_abs)
+    # The ref is cosmetic SMIL metadata, but "|" would corrupt the aeneas
+    # config string, so strip it from the filename.
+    audio_ref = os.path.basename(audio_abs).replace("|", "_")
     config_string = (
         f"task_language={language}|"
         "is_text_type=plain|"

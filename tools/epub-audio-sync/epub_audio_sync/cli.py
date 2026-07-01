@@ -19,7 +19,7 @@ import sys
 from typing import Optional
 
 from . import db
-from .epub_parser import parse_epub, sha256
+from .epub_parser import parse_epub, sha256, to_iso2
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -71,7 +71,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _cmd_sync(args) -> int:
     conn = db.connect(args.db_path)
     try:
-        title, fragments, canonical_text = parse_epub(args.epub_path)
+        title, fragments, canonical_text = parse_epub(
+            args.epub_path, language=to_iso2(args.language)
+        )
         if not fragments:
             print("No text fragments extracted from EPUB.", file=sys.stderr)
             return 1
@@ -179,7 +181,9 @@ def main(argv: Optional[list] = None) -> int:
               f"Install alignment deps: pip install -r requirements-align.txt",
               file=sys.stderr)
         return 1
-    except (OSError, ValueError) as exc:
+    except Exception as exc:
+        # Covers OSError, corrupt EPUBs (zipfile.BadZipFile, EpubException),
+        # bad values, and alignment failures with a clean one-line message.
         if args.verbose:
             raise
         print(f"Error: {exc}", file=sys.stderr)
