@@ -120,7 +120,7 @@ export default {
         })
         .catch((error) => {
           console.error('Failed', error)
-          var errorMsg = err.response ? err.response.data : ''
+          var errorMsg = error.response ? error.response.data : ''
           this.$toast.error(errorMsg || 'Match all failed')
         })
     },

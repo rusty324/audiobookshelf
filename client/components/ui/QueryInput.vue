@@ -126,7 +126,7 @@ export default {
         this.setItem(val)
       }
     },
-    setItem(itemText) {
+    setItem(val) {
       if (!this.items.find((i) => i.name.toLowerCase() !== val.toLowerCase())) {
         var newItem = {
           id: `new-${Date.now()}`,

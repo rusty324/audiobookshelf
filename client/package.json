@@ -10,6 +10,8 @@
     "build": "nuxt build",
     "start": "nuxt start",
     "generate": "nuxt generate",
+    "lint": "eslint --ext .js,.vue components pages layouts plugins store mixins",
+    "lint:fix": "eslint --ext .js,.vue components pages layouts plugins store mixins --fix",
     "test": "npm run compile-tailwind && cypress run --component --browser chrome",
     "test-visually": "npm run compile-tailwind && cypress open --component --browser chrome",
     "compile-tailwind": "npx @tailwindcss/cli -i ./assets/tailwind.css -o ./cypress/support/tailwind.compiled.css"
@@ -38,6 +40,8 @@
   "devDependencies": {
     "@nuxtjs/pwa": "^3.3.5",
     "@tailwindcss/cli": "^4.0.14",
+    "eslint": "^8.57.1",
+    "eslint-plugin-vue": "^9.33.0",
     "postcss": "^8.3.6",
     "tailwindcss": "^4.0.13"
   },

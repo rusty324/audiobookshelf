@@ -40,7 +40,7 @@ export default {
         try {
           localStorage.setItem('volume', val)
         } catch (error) {
-          console.error('Failed to store volume', err)
+          console.error('Failed to store volume', error)
         }
         this.$emit('input', val)
       }

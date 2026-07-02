@@ -83,6 +83,9 @@ export default {
   },
   data() {
     return {
+      // Stable unique id generated once per instance (used to bind the label to its input).
+      // Must not be a computed, which would return a new random value on each access.
+      identifier: Math.random().toString(36).substring(2),
       textInput: null,
       currentSearch: null,
       typingTimeout: null,
@@ -122,9 +125,6 @@ export default {
     },
     filterData() {
       return this.$store.state.libraries.filterData || {}
-    },
-    identifier() {
-      return Math.random().toString(36).substring(2)
     }
   },
   methods: {

@@ -583,7 +583,7 @@ class MiscController {
       case 'unlink':
         Watcher.onFileRemoved(libraryId, path)
         break
-      case 'rename':
+      case 'rename': {
         const oldPath = req.body.oldPath
         if (!oldPath) {
           Logger.error(`[MiscController] Invalid request body for updateWatchedPath. oldPath is required for rename.`)
@@ -591,6 +591,7 @@ class MiscController {
         }
         Watcher.onFileRename(libraryId, oldPath, path)
         break
+      }
       default:
         Logger.error(`[MiscController] Invalid type for updateWatchedPath. type: "${type}"`)
         return res.sendStatus(400)
@@ -667,7 +668,7 @@ class MiscController {
           Logger.warn(`[MiscController] Invalid value for authActiveAuthMethods`)
         }
       } else if (key === 'authOpenIDMobileRedirectURIs') {
-        function isValidRedirectURI(uri) {
+        const isValidRedirectURI = (uri) => {
           if (typeof uri !== 'string') return false
           const pattern = new RegExp('^\\w+://[\\w\\.-]+(/[\\w\\./-]*)*$', 'i')
           return pattern.test(uri)
