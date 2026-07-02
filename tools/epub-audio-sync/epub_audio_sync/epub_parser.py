@@ -27,6 +27,29 @@ log = logging.getLogger(__name__)
 _FALLBACK_SENT_RE = re.compile(r'(?<=[.!?])\s+(?=[\"\'\(\[]?[A-Z0-9])')
 _WHITESPACE_RE = re.compile(r"\s+")
 
+# Aeneas takes ISO 639-3 language codes ("eng"); pysbd takes ISO 639-1 ("en").
+_ISO3_TO_ISO2 = {
+    "eng": "en", "deu": "de", "ger": "de", "fra": "fr", "fre": "fr",
+    "ita": "it", "spa": "es", "por": "pt", "nld": "nl", "dut": "nl",
+    "pol": "pl", "rus": "ru", "jpn": "ja", "zho": "zh", "chi": "zh",
+    "ara": "ar", "dan": "da", "ell": "el", "gre": "el", "hin": "hi",
+    "fas": "fa", "per": "fa", "urd": "ur", "bul": "bg", "slk": "sk",
+    "hye": "hy", "arm": "hy", "kaz": "kk", "mar": "mr", "mya": "my",
+    "bur": "my", "amh": "am",
+}
+
+
+def to_iso2(code: str) -> str:
+    """Map an Aeneas/ISO 639-3 language code to a 2-letter code for pysbd.
+
+    Unknown codes fall back to "en"; :func:`split_sentences` degrades further
+    if pysbd does not support the resulting language.
+    """
+    code = (code or "").strip().lower()
+    if len(code) == 2:
+        return code
+    return _ISO3_TO_ISO2.get(code, "en")
+
 
 def sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -41,11 +64,13 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE_RE.sub(" ", text).strip()
 
 
-def split_sentences(text: str) -> List[str]:
+def split_sentences(text: str, language: str = "en") -> List[str]:
     """Split normalized text into sentences.
 
     Uses :mod:`pysbd` when available (handles abbreviations, decimals, quotes),
-    falling back to a simple regex so core parsing still works without it.
+    trying the requested language first and falling back to English if pysbd
+    does not support it, then to a simple regex so core parsing still works
+    without pysbd at all.
     """
     text = text.strip()
     if not text:
@@ -53,7 +78,13 @@ def split_sentences(text: str) -> List[str]:
     try:
         import pysbd  # type: ignore
 
-        seg = pysbd.Segmenter(language="en", clean=False)
+        try:
+            seg = pysbd.Segmenter(language=language, clean=False)
+        except Exception:
+            log.warning(
+                "pysbd does not support language %r; using English rules", language
+            )
+            seg = pysbd.Segmenter(language="en", clean=False)
         sentences = [s.strip() for s in seg.segment(text)]
     except Exception:  # pragma: no cover - exercised only without pysbd
         log.warning(
@@ -135,17 +166,20 @@ def get_title(book, epub_path: str) -> str:
     return os.path.splitext(os.path.basename(epub_path))[0]
 
 
-def parse_epub(epub_path: str) -> Tuple[str, List[TextFragment], str]:
+def parse_epub(
+    epub_path: str, language: str = "en"
+) -> Tuple[str, List[TextFragment], str]:
     """Parse an EPUB into ``(title, fragments, canonical_text)``.
 
-    Requires ``ebooklib`` and ``beautifulsoup4`` (core dependencies).
+    ``language`` is a 2-letter code for sentence segmentation (see
+    :func:`to_iso2`). Requires ``ebooklib`` and ``beautifulsoup4``.
     """
     from ebooklib import epub
 
     book = epub.read_epub(epub_path)
     title = get_title(book, epub_path)
     full_text = extract_text(book)
-    sentences = split_sentences(full_text)
+    sentences = split_sentences(full_text, language=language)
     canonical_text, fragments = build_fragments(sentences)
     log.info("Parsed %d sentence fragments from %s", len(fragments), epub_path)
     return title, fragments, canonical_text
