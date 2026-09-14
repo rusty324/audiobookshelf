@@ -122,4 +122,43 @@ As of v2.36.0 upstream's readme states:
 
 > Frontend pull requests are not being reviewed or merged for the existing Vue frontend. The frontend is currently being rewritten and migrated to **React**.
 
-No rewrite code has landed yet (only the note plus some server-side Next.js `basePath` handling), but this fork's client-side changes — series reorder, the organize UI entry points, `client/.eslintrc.js`, and the client bug fixes above — all live in the Vue client that upstream intends to replace. Expect those to need reimplementation, and weigh further Vue-side investment accordingly. The server-side changes (organize endpoint, bug fixes, ESLint, the epub tool) are unaffected.
+No rewrite code has landed yet — only the readme note plus some server-side Next.js `basePath` handling (`c0b9110`, `1343220`), which suggests the new client will be Next.js/React mounted behind the existing server.
+
+Timing is unannounced beyond "soon", so treat the section below as a standing checklist rather than imminent work.
+
+### React migration exposure
+
+Most of this fork is unaffected. The divergence splits as follows (measured against the upstream tip, excluding lockfiles):
+
+| Area                        | Divergence          | Fate in a React rewrite                            |
+| --------------------------- | ------------------- | -------------------------------------------------- |
+| Vue components              | 128 lines, 8 files  | ⚠️ Needs porting                                   |
+| `client/strings/en-us.json` | 8 lines             | Likely portable (framework-agnostic)               |
+| `client/.eslintrc.js`       | whole file          | Obsolete — `plugin:vue/*` is meaningless for React |
+| Server                      | 227 lines, 14 files | Unaffected                                         |
+| `tools/epub-audio-sync`     | 1,373 lines         | Unaffected (standalone Python)                     |
+| Tests                       | 50 lines            | Unaffected                                         |
+
+**Porting checklist — the only real UI work.** These three files carry the actual features:
+
+| File                                             | Lines | What to reimplement                                                                         |
+| ------------------------------------------------ | ----- | ------------------------------------------------------------------------------------------- |
+| `client/components/ui/MultiSelectQueryInput.vue` | +41   | Series reorder: `orderable` prop, `moveItemUp`/`moveItemDown`, buttons opposite edit/remove |
+| `client/components/modals/item/tabs/Tools.vue`   | +46   | "Organize into folders" button + description                                                |
+| `client/components/cards/LazyBookCard.vue`       | +36   | "Organize into folders" context-menu entry                                                  |
+
+Also re-apply the `orderable` pass-through in `client/components/widgets/SeriesInputWidget.vue` (1 line) and re-add the custom strings listed in sections 1–2.
+
+**No action needed** for the remaining four Vue files (`VolumeControl.vue`, `UploadImageModal.vue`, `LibraryItem.vue`, `QueryInput.vue`). Each is a one-line bug fix to Vue code that the rewrite deletes outright; the bugs disappear with it.
+
+### Why the exposure is small
+
+The organize feature is deliberately **server endpoint + thin UI**: `POST /api/items/:id/organize`, the `fileUtils` helpers, all guard logic and its unit tests are server-side. The React client will use the same REST API, so the endpoint keeps working untouched — only the buttons that call it need rebuilding. Prefer this shape (API-first, thin client) for future customizations.
+
+### Practical guidance
+
+- **Upstreaming UI work is closed** for the Vue client; contributing these features to mainline means waiting for the React client.
+- **Avoid large new Vue-side investments.** Small self-contained wins are still fine — the sunk cost is minutes.
+- **The next sync will differ in kind.** This one was a clean 122-commit merge; when the rewrite lands, `client/` is likely replaced wholesale, so fork files vanish rather than conflict. That is a port, not a merge — review before syncing.
+- **Don't adopt the React client immediately.** Early versions may lag the mature Vue client in feature parity; upgrading on day one risks losing functionality in daily use.
+- **Staying on Vue long-term is not viable** either — it would mean maintaining a frontend upstream has abandoned, with each sync growing harder. Upstream's rewrite also resolves this fork's Nuxt 2 / Vue 2 end-of-life exposure at no cost to us.
