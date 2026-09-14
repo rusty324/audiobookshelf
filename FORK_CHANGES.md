@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 7
-- **Net divergence:** 48 files changed, 3847 insertions(+), 119 deletions(-)
+- **Fork-only commits on `origin/master`:** 11
+- **Net divergence:** 51 files changed, 4725 insertions(+), 388 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -76,6 +76,20 @@ Configs keep high-value bug rules as **errors** and downgrade pre-existing styli
 
 - `docker-compose.yml` — service now builds from this repo's `Dockerfile` (`build: context: .`, tagged `audiobookshelf:local`) instead of pulling `ghcr.io/advplyr/audiobookshelf:latest`, so the running container reflects this fork's code. **Rebuild with `docker compose up -d --build` after merging any change.**
 
+### Dependency security fixes + Dependabot (PR #10 — `7a532f0`)
+
+Applied after the v2.36.0 sync, which had raised runtime criticals from 1 to 3.
+
+- `package-lock.json` — `npm audit fix` **without** `--force`, so only versions already allowed by the existing `package.json` ranges were taken. Runtime vulnerabilities **38 → 13**, criticals **3 → 1**; clears the `form-data` and `sequelize` criticals plus most highs (`ws`, `validator`, `express`, the `socket.io`/`engine.io` stack, `lodash`, `path-to-regexp`). `package.json` is deliberately untouched — lockfile only, no range changes.
+- `.github/dependabot.yml` (new) — weekly checks for root npm, `client/` npm and `github-actions`. Minor/patch grouped into one PR; **majors raised individually** so each can be tested in isolation.
+
+> Because Dependabot is now active, expect incoming PRs for the deferred majors below. Those touch runtime behavior (and, for `sqlite3`, a compiled native module in the database path), so they need more than a green unit-test run before merging.
+
+### Fork divergence log (PRs #9, #10 — `bb3f36e`, `77acb13`, `705e82e`)
+
+- `FORK_CHANGES.md` (new) — this document.
+- `scripts/update-fork-changes.sh` (new) — regenerates the sync-status block from local git history; see [Regenerating this block](#regenerating-this-block).
+
 ---
 
 ## 3. Bug fixes not in upstream
@@ -103,15 +117,13 @@ Configs keep high-value bug rules as **errors** and downgrade pre-existing styli
 
 ---
 
-## 4. Pending — not yet on `master`
+## 4. Pending and deferred
 
-| PR            | Branch                             | Contents                                                                                                                                        |
-| ------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| **#5** (open) | `claude/dependency-security-fixes` | `npm audit fix` (non-breaking): 38 → 13 vulns, criticals 3 → 1. Adds `.github/dependabot.yml`. Lockfile-only; no `package.json` ranges changed. |
+No fork branches are currently unmerged — everything in sections 1–3 is on `master`.
 
 ### Known deferred items
 
-- **Major dependency bumps** (all remaining advisories need these): `axios` → 1.x, `nodemailer` → 9.x, and the `sqlite3` → 6.x native-module cluster (`sqlite3`, `tar`, `node-gyp`, `make-fetch-happen`, `cacache`). The last remaining **critical (`tar`)** is inside that cluster.
+- **Major dependency bumps.** After PR #10 the remaining **13 advisories all require breaking majors**, so there is no safe fruit left to pick: `axios` → 1.x, `nodemailer` → 9.x, and the `sqlite3` → 6.x native-module cluster (`sqlite3`, `tar`, `node-gyp`, `make-fetch-happen`, `cacache`). The last remaining **critical (`tar`)** is inside that cluster, so only the `sqlite3` bump can clear it. `sqlite3` is a compiled native module on the database path — verify the DB opens and migrations run, not just that the unit tests pass.
 - **`LibraryItem.hasAudioTracks`** is defined as _both_ a getter and a method; the method wins, so property-style call sites (`libraryItem.hasAudioTracks`) get a truthy function reference instead of a boolean and those guards never fire. Left as an ESLint warning pending a focused fix.
 
 ---
