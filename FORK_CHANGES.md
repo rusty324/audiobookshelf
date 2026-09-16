@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 11
-- **Net divergence:** 51 files changed, 4725 insertions(+), 388 deletions(-)
+- **Fork-only commits on `origin/master`:** 12
+- **Net divergence:** 51 files changed, 4737 insertions(+), 388 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -134,43 +134,49 @@ As of v2.36.0 upstream's readme states:
 
 > Frontend pull requests are not being reviewed or merged for the existing Vue frontend. The frontend is currently being rewritten and migrated to **React**.
 
-No rewrite code has landed yet — only the readme note plus some server-side Next.js `basePath` handling (`c0b9110`, `1343220`), which suggests the new client will be Next.js/React mounted behind the existing server.
+The rewrite is real and well advanced, but it lives in a **separate repository**, not in this one:
 
-Timing is unannounced beyond "soon", so treat the section below as a standing checklist rather than imminent work.
+- **Upstream React client:** [`audiobookshelf/audiobookshelf-client-react`](https://github.com/audiobookshelf/audiobookshelf-client-react) — note the `audiobookshelf` **org**, not the `advplyr` user account.
+- **This project's fork:** `rusty324/audiobookshelf-client-react`, deliberately kept **separate from upstream** (no developer permissions on the upstream project), so nothing here is intended to be upstreamed.
+- Inside _this_ repo, only server-side groundwork has landed — Next.js `basePath` handling (`c0b9110`, `1343220`). The server mounts the React client via a `REACT_CLIENT_PATH` config value.
 
-### React migration exposure
+### React client maturity (assessed 2026-09-16)
 
-Most of this fork is unaffected. The divergence splits as follows (measured against the upstream tip, excluding lockfiles):
+Stack: **Next.js 16 / React 19 / TypeScript 5 / Tailwind 4**, pnpm, `next-intl`. Note it is TypeScript, where the Vue client is plain JS.
 
-| Area                        | Divergence          | Fate in a React rewrite                            |
-| --------------------------- | ------------------- | -------------------------------------------------- |
-| Vue components              | 128 lines, 8 files  | ⚠️ Needs porting                                   |
-| `client/strings/en-us.json` | 8 lines             | Likely portable (framework-agnostic)               |
-| `client/.eslintrc.js`       | whole file          | Obsolete — `plugin:vue/*` is meaningless for React |
-| Server                      | 227 lines, 14 files | Unaffected                                         |
-| `tools/epub-audio-sync`     | 1,373 lines         | Unaffected (standalone Python)                     |
-| Tests                       | 50 lines            | Unaffected                                         |
+Scale: 51 routes, 471 `.tsx` files, 286 components, 38 Cypress component specs. Feature coverage maps onto the Vue client's pages with no significant gaps found, and adds an issues page and a `components_catalog/` design-system showcase. Recent commits are **polish-level** (tab titles, mobile layout, chapter-boundary seeking, unsaved-change confirmations) rather than feature-building, and PR numbers are past #280 with several regular contributors — i.e. it is further along than "in active development" implies.
 
-**Porting checklist — the only real UI work.** These three files carry the actual features:
+It can be tried without building from source: `ghcr.io/audiobookshelf/audiobookshelf-react:latest` is published per commit. Its README recommends pointing it at a **separate config and libraries**, not a production server.
 
-| File                                             | Lines | What to reimplement                                                                         |
-| ------------------------------------------------ | ----- | ------------------------------------------------------------------------------------------- |
-| `client/components/ui/MultiSelectQueryInput.vue` | +41   | Series reorder: `orderable` prop, `moveItemUp`/`moveItemDown`, buttons opposite edit/remove |
-| `client/components/modals/item/tabs/Tools.vue`   | +46   | "Organize into folders" button + description                                                |
-| `client/components/cards/LazyBookCard.vue`       | +36   | "Organize into folders" context-menu entry                                                  |
+### Porting status
 
-Also re-apply the `orderable` pass-through in `client/components/widgets/SeriesInputWidget.vue` (1 line) and re-add the custom strings listed in sections 1–2.
+| Fork feature                   | Status in the React fork                                                                                                            |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **Series reorder buttons**     | ✅ **Ported** — `rusty324/audiobookshelf-client-react` PR #1 (`469430d`)                                                            |
+| **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.         |
+| Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                               |
+| `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                            |
+| `client/strings/en-us.json`    | Keys re-added per feature; the React client has its own `src/locales/en-us.json` (types derive from it, so new keys are type-safe). |
 
-**No action needed** for the remaining four Vue files (`VolumeControl.vue`, `UploadImageModal.vue`, `LibraryItem.vue`, `QueryInput.vue`). Each is a one-line bug fix to Vue code that the rewrite deletes outright; the bugs disappear with it.
+**Series reorder port** applied the same opt-in design as the Vue version — a `showMoveButtons`/`orderable` prop rather than always-on — so the shared components stay unchanged for authors, genres, tags and narrators:
 
-### Why the exposure is small
+- `src/components/ui/Pill.tsx` — move up/down cluster on the **start** side, opposite the existing edit/remove cluster.
+- `src/components/ui/MultiSelect.tsx` — `orderable` prop + `onItemMoved(fromIndex, toIndex)`, bounds-checked, shown only with 2+ items.
+- `src/components/ui/TwoStageMultiSelect.tsx` — passes both through (this is the series editor).
+- `src/components/widgets/BookDetailsEdit.tsx` — reorders `details.series` immutably.
 
-The organize feature is deliberately **server endpoint + thin UI**: `POST /api/items/:id/organize`, the `fileUtils` helpers, all guard logic and its unit tests are server-side. The React client will use the same REST API, so the endpoint keeps working untouched — only the buttons that call it need rebuilding. Prefer this shape (API-first, thin client) for future customizations.
+> ⚠️ **Unverified by a compiler.** The React repo could not be `pnpm install`ed in the environment that wrote the port — its `foliate-js` dependency is a git tarball from `codeload.github.com`, which was blocked (HTTP 403) — so `pnpm check` (lint + typecheck) and Cypress never ran. Prettier, a TypeScript syntax parse and standalone logic tests of the reorder algorithm all passed. **Run `pnpm check` locally before relying on it.**
+
+**If the organize UI is ported later,** the React targets are `src/components/widgets/Tools.tsx` (Tools is a page here, not a modal tab), `src/components/widgets/media-card/MediaCardMoreMenu.tsx` (declarative `MediaCardMoreMenuItem[]`), and `src/lib/api.ts` for the call.
+
+### Why the exposure was small
+
+The organize feature is deliberately **server endpoint + thin UI**: `POST /api/items/:id/organize`, the `fileUtils` helpers, all guard logic and its unit tests are server-side. The React client uses the same REST API, so the endpoint keeps working untouched — only the buttons that call it need rebuilding. Prefer this shape (API-first, thin client) for future customizations.
 
 ### Practical guidance
 
-- **Upstreaming UI work is closed** for the Vue client; contributing these features to mainline means waiting for the React client.
+- **Upstreaming is not a goal** for this project — both forks are maintained independently. The React fork will need periodic syncing with its own upstream, and the opt-in `orderable` design keeps the conflict surface small if upstream later builds its own reorder UI.
 - **Avoid large new Vue-side investments.** Small self-contained wins are still fine — the sunk cost is minutes.
-- **The next sync will differ in kind.** This one was a clean 122-commit merge; when the rewrite lands, `client/` is likely replaced wholesale, so fork files vanish rather than conflict. That is a port, not a merge — review before syncing.
-- **Don't adopt the React client immediately.** Early versions may lag the mature Vue client in feature parity; upgrading on day one risks losing functionality in daily use.
-- **Staying on Vue long-term is not viable** either — it would mean maintaining a frontend upstream has abandoned, with each sync growing harder. Upstream's rewrite also resolves this fork's Nuxt 2 / Vue 2 end-of-life exposure at no cost to us.
+- **A future sync of _this_ repo may remove `client/` wholesale** if upstream drops the Vue client from the server repo. That would be a removal rather than a conflict — review before syncing.
+- **Test the React client against a throwaway config first.** It is more mature than an early rewrite, so the parity risk is lower than it once looked, but it is still not what this server ships by default.
+- Upstream's rewrite resolves this fork's Nuxt 2 / Vue 2 end-of-life exposure at no cost to us.
