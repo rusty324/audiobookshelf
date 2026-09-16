@@ -5,6 +5,7 @@ const Database = require('../Database')
 const { toNumber, isUUID } = require('../utils/index')
 const { getAudioMimeTypeFromExtname, encodeUriPath } = require('../utils/fileUtils')
 const { PlayMethod } = require('../utils/constants')
+const { sanitizeClientEvent, coalesceSeeks } = require('../utils/playbackEvents')
 
 const ShareManager = require('../managers/ShareManager')
 
@@ -165,6 +166,61 @@ class SessionController {
    */
   sync(req, res) {
     this.playbackSessionManager.syncSessionRequest(req.user, req.playbackSession, req.body, res)
+  }
+
+  /**
+   * POST: /api/session/:id/events
+   *
+   * Ingest a batch of playback events (play/pause/seek/chapter skip) from the
+   * client for the listening log. The client buffers events and flushes them
+   * periodically so that scrubbing does not produce a request per tick.
+   *
+   * Client input is untrusted: event types are checked against an allowlist,
+   * times are clamped to the item duration, and jump types are re-derived
+   * server-side rather than taken on trust.
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async recordEvents(req, res) {
+    const session = req.playbackSession
+    const submitted = req.body?.events
+
+    if (!Array.isArray(submitted)) {
+      return res.status(400).send('Request body must include an "events" array')
+    }
+    // Bound the batch so a single request cannot flood the log
+    if (submitted.length > 100) {
+      return res.status(400).send('Too many events in one request (max 100)')
+    }
+
+    const mediaItemId = session.episodeId || session.bookId
+    if (!mediaItemId) {
+      Logger.error(`[SessionController] Session "${session.id}" has no media item to attach events to`)
+      return res.sendStatus(422)
+    }
+
+    const sanitized = submitted
+      .map((event) => sanitizeClientEvent(event, { duration: session.duration, chapters: session.chapters || [], source: 'web' }))
+      .filter((event) => event)
+      .sort((a, b) => a.createdAt - b.createdAt)
+
+    const events = coalesceSeeks(sanitized)
+
+    try {
+      const written = await Database.playbackEventModel.recordEvents({
+        userId: session.userId,
+        mediaItemId,
+        mediaItemType: session.episodeId ? 'podcastEpisode' : 'book',
+        libraryItemId: session.libraryItemId,
+        playbackSessionId: session.id,
+        events
+      })
+      res.json({ received: submitted.length, written })
+    } catch (error) {
+      Logger.error(`[SessionController] Failed to record playback events for session "${session.id}"`, error)
+      res.sendStatus(500)
+    }
   }
 
   /**
