@@ -182,6 +182,34 @@ class MeController {
    * @param {RequestWithUser} req
    * @param {Response} res
    */
+  /**
+   * GET: /api/me/item/:libraryItemId/playback-events
+   *
+   * Paginated listening log for one library item: the discrete play, pause,
+   * seek and chapter-skip events recorded for the current user.
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async getItemPlaybackEvents(req, res) {
+    const libraryItem = await Database.libraryItemModel.getExpandedById(req.params.libraryItemId)
+    if (!libraryItem) {
+      Logger.error(`[MeController] Library item not found for id "${req.params.libraryItemId}"`)
+      return res.sendStatus(404)
+    }
+
+    if (!req.user.checkCanAccessLibraryItem(libraryItem)) {
+      Logger.error(`[MeController] User "${req.user.username}" attempted to access playback events for library item "${req.params.libraryItemId}" without access`)
+      return res.sendStatus(403)
+    }
+
+    const itemsPerPage = Math.min(toNumber(req.query.itemsPerPage, 25) || 25, 100)
+    const page = Math.max(toNumber(req.query.page, 0), 0)
+
+    const payload = await Database.playbackEventModel.getForLibraryItem(req.user.id, libraryItem.id, { page, itemsPerPage })
+    res.json(payload)
+  }
+
   async getItemListeningSessions(req, res) {
     const libraryItem = await Database.libraryItemModel.getExpandedById(req.params.libraryItemId)
     const episode = await Database.podcastEpisodeModel.findByPk(req.params.episodeId)

@@ -4,6 +4,7 @@ const serverVersion = require('../../package.json').version
 const Logger = require('../Logger')
 const SocketAuthority = require('../SocketAuthority')
 const Database = require('../Database')
+const { resolveChapter } = require('../utils/playbackEvents')
 
 const date = require('../libs/dateAndTime')
 const fs = require('../libs/fsExtra')
@@ -360,6 +361,8 @@ class PlaybackSessionManager {
     this.sessions.push(newPlaybackSession)
     SocketAuthority.adminEmitter('user_stream_update', user.toJSONForPublic(this.sessions))
 
+    await this.recordLifecycleEvent(newPlaybackSession, 'play', newPlaybackSession.startTime)
+
     return newPlaybackSession
   }
 
@@ -418,6 +421,51 @@ class PlaybackSessionManager {
    * @param {*} syncData
    * @returns
    */
+  /**
+   * Record a play/pause event for the listening log.
+   *
+   * Done here rather than only in the web client so that sessions started from
+   * the mobile apps -- which are separate codebases and emit no client events --
+   * still show up in the log.
+   *
+   * Best effort: logging must never interfere with playback, so failures are
+   * swallowed after being logged.
+   *
+   * @param {*} session
+   * @param {'play'|'pause'} eventType
+   * @param {number} time - position in the media item
+   */
+  async recordLifecycleEvent(session, eventType, time) {
+    try {
+      const mediaItemId = session.episodeId || session.bookId
+      if (!session.userId || !mediaItemId) return
+
+      const currentTime = Number.isFinite(Number(time)) ? Number(time) : 0
+      const { chapterTitle, chapterIndex } = resolveChapter(session.chapters || [], currentTime)
+
+      await Database.playbackEventModel.recordEvents({
+        userId: session.userId,
+        mediaItemId,
+        mediaItemType: session.episodeId ? 'podcastEpisode' : 'book',
+        libraryItemId: session.libraryItemId,
+        playbackSessionId: session.id,
+        events: [
+          {
+            eventType,
+            currentTime,
+            fromTime: null,
+            chapterTitle,
+            chapterIndex,
+            source: 'server',
+            createdAt: new Date()
+          }
+        ]
+      })
+    } catch (error) {
+      Logger.error(`[PlaybackSessionManager] Failed to record "${eventType}" playback event for session "${session?.id}"`, error)
+    }
+  }
+
   async closeSession(user, session, syncData = null) {
     if (syncData) {
       await this.syncSession(user, session, syncData)
@@ -425,6 +473,7 @@ class PlaybackSessionManager {
       await this.saveSession(session)
     }
     Logger.debug(`[PlaybackSessionManager] closeSession "${session.id}"`)
+    await this.recordLifecycleEvent(session, 'pause', session.currentTime)
     SocketAuthority.adminEmitter('user_stream_update', user.toJSONForPublic(this.sessions))
     SocketAuthority.clientEmitter(session.userId, 'user_session_closed', session.id)
     return this.removeSession(session.id)
