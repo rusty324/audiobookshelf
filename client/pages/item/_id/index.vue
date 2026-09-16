@@ -79,6 +79,9 @@
             </div>
           </div>
 
+          <!-- Listening log -->
+          <widgets-listening-log v-if="!isPodcast" :library-item-id="libraryItemId" />
+
           <!-- Icon buttons -->
           <div class="flex items-center justify-center md:justify-start pt-4">
             <ui-btn v-if="showPlayButton" :disabled="isStreaming" color="bg-success" :padding-x="4" small class="flex items-center h-9 mr-2" @click="playItem">

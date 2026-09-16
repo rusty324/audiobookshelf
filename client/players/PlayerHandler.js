@@ -23,6 +23,11 @@ export default class PlayerHandler {
     this.listeningTimeSinceSync = 0
 
     this.playInterval = null
+
+    // Listening log events are buffered and flushed periodically so that
+    // scrubbing does not produce a request per tick.
+    this.playbackEventBuffer = []
+    this.playbackEventFlushTimer = null
   }
 
   get isCasting() {
@@ -140,13 +145,25 @@ export default class PlayerHandler {
 
   playerStateChange(state) {
     console.log('[PlayerHandler] Player state change', state)
+    const previousState = this.playerState
     this.playerState = state
+
+    const stateChanged = previousState !== state
 
     if (this.playerState === 'PLAYING') {
       this.setPlaybackRate(this.initialPlaybackRate)
       this.startPlayInterval()
+      if (stateChanged && this.player) {
+        this.queuePlaybackEvent('play', this.player.getCurrentTime())
+        this.startPlaybackEventFlushTimer()
+      }
     } else {
       this.stopPlayInterval()
+      if (stateChanged && previousState === 'PLAYING' && this.player) {
+        this.queuePlaybackEvent('pause', this.player.getCurrentTime())
+        this.stopPlaybackEventFlushTimer()
+        this.flushPlaybackEvents()
+      }
     }
 
     if (this.player) {
@@ -239,6 +256,7 @@ export default class PlayerHandler {
 
   closePlayer() {
     console.log('[PlayerHandler] Close Player')
+    this.flushPlaybackEvents()
     this.sendCloseSession()
     this.resetPlayer()
   }
@@ -253,6 +271,8 @@ export default class PlayerHandler {
     this.setSessionId(null)
     this.startTime = 0
     this.stopPlayInterval()
+    this.stopPlaybackEventFlushTimer()
+    this.playbackEventBuffer = []
   }
 
   resetStream(startTime, streamId) {
@@ -303,6 +323,58 @@ export default class PlayerHandler {
     return this.ctx.$axios.$post(`/api/session/${this.currentSessionId}/close`, syncData, { timeout: 6000, progress: false }).catch((error) => {
       console.error('Failed to close session', error)
     })
+  }
+
+  /**
+   * Buffer a listening log event. Flushed on a timer, on pause, and when the
+   * player closes, so a burst of seeks costs one request rather than many.
+   *
+   * @param {string} eventType - play | pause | seek | chapterSkip
+   * @param {number} currentTime - position after the action
+   * @param {number} [fromTime] - position before a seek, for "Previous place"
+   */
+  queuePlaybackEvent(eventType, currentTime, fromTime = null) {
+    if (!this.currentSessionId || !Number.isFinite(currentTime)) return
+
+    this.playbackEventBuffer.push({
+      eventType,
+      currentTime,
+      fromTime: Number.isFinite(fromTime) ? fromTime : null,
+      createdAt: Date.now()
+    })
+
+    // Keep the buffer bounded if flushes keep failing
+    if (this.playbackEventBuffer.length > 100) {
+      this.playbackEventBuffer = this.playbackEventBuffer.slice(-100)
+    }
+  }
+
+  /**
+   * Send buffered events. The server re-derives seek vs chapter skip and
+   * coalesces bursts, so the client does not need to be clever here.
+   */
+  flushPlaybackEvents() {
+    if (!this.currentSessionId || !this.playbackEventBuffer.length) return
+
+    const events = this.playbackEventBuffer
+    this.playbackEventBuffer = []
+
+    return this.ctx.$axios.$post(`/api/session/${this.currentSessionId}/events`, { events }, { timeout: 9000, progress: false }).catch((error) => {
+      // The log is non-critical: never interrupt playback over it
+      console.error('Failed to send playback events', error)
+    })
+  }
+
+  startPlaybackEventFlushTimer() {
+    this.stopPlaybackEventFlushTimer()
+    this.playbackEventFlushTimer = setInterval(() => {
+      this.flushPlaybackEvents()
+    }, 15000)
+  }
+
+  stopPlaybackEventFlushTimer() {
+    clearInterval(this.playbackEventFlushTimer)
+    this.playbackEventFlushTimer = null
   }
 
   sendProgressSync(currentTime) {
@@ -385,8 +457,16 @@ export default class PlayerHandler {
 
   seek(time, shouldSync = true) {
     if (!this.player) return
+
+    // Capture where the jump came from before moving, so the listening log can
+    // show the previous place. The server decides whether this is a plain seek
+    // or a chapter skip.
+    const fromTime = this.player.getCurrentTime()
+
     this.player.seek(time, this.playerPlaying)
     this.ctx.setCurrentTime(time)
+
+    this.queuePlaybackEvent('seek', time, fromTime)
 
     // Update progress if paused
     if (!this.playerPlaying && shouldSync) {
