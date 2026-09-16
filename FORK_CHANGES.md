@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 12
-- **Net divergence:** 51 files changed, 4737 insertions(+), 388 deletions(-)
+- **Fork-only commits on `origin/master`:** 16
+- **Net divergence:** 63 files changed, 5691 insertions(+), 389 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -49,6 +49,39 @@ Up/down arrow buttons on each chip in the book-edit **Series** field, since `ser
 - `client/components/ui/MultiSelectQueryInput.vue` — new `orderable` prop; `moveItemUp()` / `moveItemDown()`; reorder buttons rendered on the **opposite side** of the chip from edit/remove to avoid accidental deletion; chip widened in orderable mode.
 - `client/components/widgets/SeriesInputWidget.vue` — passes `orderable`, so **only** the series field is affected (authors/tags/genres/narrators share the component and are unchanged).
 - `client/strings/en-us.json` — `ButtonMoveUp` / `ButtonMoveDown`.
+
+### Listening log (PRs #13, #15 — `98c52b4`, `226cee0`)
+
+Audible-style per-item history shown under the progress bar on the book page, with dated entries for play, pause, jumps and chapter skips.
+
+Upstream records one `PlaybackSession` row per listening session and has no table of discrete actions, so the events are new. Capture is deliberately split between two sources:
+
+| Source                                 | Emits                                         | Covers                                          |
+| -------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
+| Server, at playback session boundaries | `play`, `pause`                               | **All** clients, including the iOS/Android apps |
+| Web player                             | `seek`, `chapterSkip`, precise `play`/`pause` | Web only                                        |
+
+The mobile apps are separate codebases that will never emit client events, so client-only capture would have silently omitted all mobile listening. Each row stores its `source` so the UI can be honest about coverage.
+
+- `server/models/PlaybackEvent.js` — polymorphic `mediaItemId`/`mediaItemType` like `PlaybackSession`, so it covers books and podcast episodes. Stores position, the position jumped _from_ (Audible's "Previous place"), the resolved chapter and the source. **Pruned to the newest 500 per user+item on every write**, since scrubbing generates events quickly.
+- `server/utils/playbackEvents.js` — pure helpers (chapter resolution, seek-vs-chapter-skip classification, clamping/validation of untrusted input, coalescing of seek bursts), unit tested in `test/server/utils/playbackEvents.test.js`.
+- `server/managers/PlaybackSessionManager.js` — records play/pause at session start/close, **best effort**: a logging failure is swallowed rather than interfering with playback.
+- `POST /api/session/:id/events` — bounded batch ingest. Event types checked against an allowlist, times clamped to the item duration, and **jump types re-derived server-side rather than trusted**.
+- `GET /api/me/item/:libraryItemId/playback-events` — paginated, behind the same access check as the sibling sessions endpoint.
+- `client/players/PlayerHandler.js` — buffers events and flushes on a timer, on pause and on close, so scrubbing costs one request rather than one per tick. Play/pause are emitted only on a **real state transition**, so intermediate states do not fill the log.
+- `client/components/widgets/ListeningLog.vue` — collapsed by default, grouped by day.
+
+**No migration.** Migrations here are semver-gated against the server version, and this fork stays on upstream's version so the update check keeps working — a new migration would never run. `Database.buildModels()` ends in `sequelize.sync()`, which creates tables that do not exist, and this is a new table. _Altering_ it later would still require a migration.
+
+### Sleep timer auto-rewind (PR #14 — `1e96e9c`)
+
+A sleep timer usually expires after you have already drifted off, so playback now backs up before pausing rather than resuming exactly where it stopped. The iOS app does this; the web player did not.
+
+- `client/store/user.js` — new `sleepTimerAutoRewindAmount` setting (seconds, `0` disables), **defaulting to 60**. Stored with the other player preferences in localStorage, so there are no server changes.
+- `client/components/app/MediaPlayerContainer.vue` — rewind in `sleepTimerEnd()`, after the player is paused, applying to **both** timer modes (countdown and end-of-chapter). `getAutoRewindTarget()` clamps to zero so a timer firing near the start of a book cannot seek negative, and returns null when off, leaving previous behavior unchanged.
+- `client/components/modals/SleepTimerModal.vue` — Off / 5s / 10s / 15s / 30s / 60s selector.
+
+Existing users pick up the default: `loadUserSettings` starts from the defaults and only overwrites keys already present in localStorage.
 
 ### EPUB ↔ audiobook sync CLI (PRs #7, #8 — `77ca2e3`, `3b9711d`)
 
@@ -152,7 +185,9 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 
 | Fork feature                   | Status in the React fork                                                                                                            |
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Series reorder buttons**     | ✅ **Ported** — `rusty324/audiobookshelf-client-react` PR #1 (`469430d`)                                                            |
+| **Series reorder buttons**     | ✅ **Ported** — React PR #1 (`469430d`)                                                                                             |
+| **Sleep timer auto-rewind**    | ✅ **Ported** — React PR #2 (`db3d201`)                                                                                             |
+| **Listening log**              | ✅ **Ported** — React PR #3 (`5dddbd3`), log UI **and** player event emission                                                       |
 | **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.         |
 | Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                               |
 | `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                            |
@@ -166,6 +201,10 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 - `src/components/widgets/BookDetailsEdit.tsx` — reorders `details.series` immutably.
 
 > ⚠️ **Unverified by a compiler.** The React repo could not be `pnpm install`ed in the environment that wrote the port — its `foliate-js` dependency is a git tarball from `codeload.github.com`, which was blocked (HTTP 403) — so `pnpm check` (lint + typecheck) and Cypress never ran. Prettier, a TypeScript syntax parse and standalone logic tests of the reorder algorithm all passed. **Run `pnpm check` locally before relying on it.**
+
+**Sleep timer auto-rewind port** mirrors the Vue behavior with the same setting and defaults. `getAutoRewindTarget` lives in `src/lib/player/sleepTimerUtils.ts`; the rewind runs in `handleSleepTimerEnd` (`usePlayerControlsState.ts`), where `seek` and `getCurrentTime` are already in scope; the amount persists in `usePlayerSettings`.
+
+**Listening log port** reads the same API, so no server work was needed. `fetchPlaybackEventsAction` / `recordPlaybackEventsAction` are server actions (`apiRequest` is server-only, so client components cannot call it directly), the event types live in `src/types/api.ts` rather than the actions file (a `'use server'` module should export only async functions), and `usePlaybackEventLog` buffers and flushes emission the way `PlayerHandler` does on the Vue side. Two React-specific details differ from Vue: `seek` reads the origin **before** moving, because the React seek can resolve asynchronously; and `playerStateRef` is assigned **before** `setPlayerState`, which is batched, so rapid successive state changes cannot compare against a stale previous value.
 
 **If the organize UI is ported later,** the React targets are `src/components/widgets/Tools.tsx` (Tools is a page here, not a modal tab), `src/components/widgets/media-card/MediaCardMoreMenu.tsx` (declarative `MediaCardMoreMenuItem[]`), and `src/lib/api.ts` for the call.
 
