@@ -18,6 +18,11 @@
           <ui-btn color="bg-success" type="submit" :padding-x="0" class="h-9 w-18 flex items-center justify-center ml-1">{{ $strings.ButtonSubmit }}</ui-btn>
         </form>
       </div>
+      <div class="w-full px-6 pb-4">
+        <div class="mb-3 h-px w-full bg-white/10" />
+        <ui-dropdown v-model="autoRewindAmount" :label="$strings.LabelSleepTimerAutoRewind" :items="autoRewindOptions" small />
+        <p class="pt-1 text-xs text-gray-400">{{ $strings.LabelSleepTimerAutoRewindHelp }}</p>
+      </div>
       <div v-if="timerSet" class="w-full p-4">
         <div class="mb-4 h-px w-full bg-white/10" />
 
@@ -65,6 +70,24 @@ export default {
       },
       set(val) {
         this.$emit('input', val)
+      }
+    },
+    autoRewindOptions() {
+      return [
+        { text: this.$strings.LabelOff, value: 0 },
+        { text: this.$getString('LabelTimeDurationXSeconds', ['5']), value: 5 },
+        { text: this.$getString('LabelTimeDurationXSeconds', ['10']), value: 10 },
+        { text: this.$getString('LabelTimeDurationXSeconds', ['15']), value: 15 },
+        { text: this.$getString('LabelTimeDurationXSeconds', ['30']), value: 30 },
+        { text: this.$getString('LabelTimeDurationXSeconds', ['60']), value: 60 }
+      ]
+    },
+    autoRewindAmount: {
+      get() {
+        return Number(this.$store.getters['user/getUserSetting']('sleepTimerAutoRewindAmount')) || 0
+      },
+      set(value) {
+        this.$store.dispatch('user/updateUserSettings', { sleepTimerAutoRewindAmount: Number(value) || 0 })
       }
     },
     sleepTimes() {

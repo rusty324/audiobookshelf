@@ -145,6 +145,9 @@ export default {
       if (this.streamEpisode) return this.streamEpisode.chapters || []
       return this.media.chapters || []
     },
+    sleepTimerAutoRewindAmount() {
+      return Number(this.$store.getters['user/getUserSetting']('sleepTimerAutoRewindAmount')) || 0
+    },
     currentChapter() {
       return this.chapters.find((chapter) => chapter.start <= this.currentTime && this.currentTime < chapter.end)
     },
@@ -249,9 +252,28 @@ export default {
         this.lastChapterId = this.currentChapter.id
       }
     },
+    /**
+     * Where playback should resume after a sleep timer expires.
+     * Clamped so a timer firing near the start of a book cannot seek negative.
+     */
+    getAutoRewindTarget(currentTime, rewindAmount) {
+      if (!Number.isFinite(currentTime) || !Number.isFinite(rewindAmount) || rewindAmount <= 0) return null
+      return Math.max(0, currentTime - rewindAmount)
+    },
     sleepTimerEnd() {
       this.clearSleepTimer()
       this.playerHandler.pause()
+
+      // A sleep timer usually expires some time after you have drifted off, so
+      // back up a little rather than resuming exactly where playback stopped.
+      const rewindAmount = this.sleepTimerAutoRewindAmount
+      const rewindTarget = this.getAutoRewindTarget(this.currentTime, rewindAmount)
+      if (rewindTarget !== null) {
+        this.playerHandler.seek(rewindTarget)
+        this.$toast.info(this.$getString('ToastSleepTimerDoneRewound', [String(rewindAmount)]))
+        return
+      }
+
       this.$toast.info(this.$strings.ToastSleepTimerDone)
     },
     cancelSleepTimer() {
