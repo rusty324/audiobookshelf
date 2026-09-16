@@ -18,7 +18,9 @@ export const state = () => ({
     authorSortBy: 'name',
     authorSortDesc: false,
     jumpForwardAmount: 10,
-    jumpBackwardAmount: 10
+    jumpBackwardAmount: 10,
+    // Seconds to rewind when a sleep timer expires. 0 disables the rewind.
+    sleepTimerAutoRewindAmount: 60
   }
 })
 
