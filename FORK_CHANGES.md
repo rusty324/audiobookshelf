@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 16
-- **Net divergence:** 63 files changed, 5691 insertions(+), 389 deletions(-)
+- **Fork-only commits on `origin/master`:** 17
+- **Net divergence:** 67 files changed, 6072 insertions(+), 389 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -82,6 +82,36 @@ A sleep timer usually expires after you have already drifted off, so playback no
 - `client/components/modals/SleepTimerModal.vue` — Off / 5s / 10s / 15s / 30s / 60s selector.
 
 Existing users pick up the default: `loadUserSettings` starts from the defaults and only overwrites keys already present in localStorage.
+
+### JSON library export (PR #17 — `7bfa10b`)
+
+An export button on the libraries settings page downloads a flat JSON listing of every book the user can see, for use outside Audiobookshelf. Upstream has no bulk metadata export — the API returns per-library paginated item payloads shaped for the UI, not a portable listing.
+
+```json
+[
+  {
+    "title": "House of Earth and Blood_A Novel",
+    "author": "Sarah J. Maas",
+    "series": "Crescent City #1",
+    "formats": ["audiobook", "ebook"],
+    "coverUrl": "/api/items/<id>/cover",
+    "genre": ["Fantasy"]
+  }
+]
+```
+
+Shaping rules, all in `server/utils/libraryExport.js` so they are free of database and request access and directly unit-testable against plain objects:
+
+- Title and subtitle are joined with an **underscore**; a book with no subtitle keeps its title unchanged.
+- A book in several series uses the **last** one, formatted `Name #sequence` (bare name when there is no sequence).
+- `formats` reflects what the library actually holds. **Audio files flagged as excluded do not count**, so a book whose only audio is excluded is not reported as an audiobook.
+- `coverUrl` is the ABS cover API path, present **only when the item has a cover** — covers are served from the API rather than stored as external URLs.
+- Books with neither an audiobook nor an ebook are **omitted entirely**.
+
+- `GET /api/libraries/books-export` (`LibraryController.getBooksExport`) — spans every book library the user can access. Reuses the same `librariesAccessible` filter as `findAll` **and** additionally checks `checkCanAccessLibraryItem` per item, since tag-restricted users may not see everything in a library they can otherwise open.
+- **Route ordering matters:** registered **before** `/libraries/:id` in `ApiRouter.js`. Registered after, Express matches `"books-export"` as a library id and the endpoint silently never runs.
+- `client/pages/config/libraries.vue` — the button lives on the settings page rather than a library view, because the export spans all libraries. Uses the existing `$downloadFile` helper with a Blob URL that is revoked after handoff.
+- `test/server/utils/libraryExport.test.js` — 23 tests, including the three requested example entries verbatim. The multi-series and cover-path behavior was additionally checked end-to-end against a scratch database with real rows, so the ordering relies on the real Sequelize shape rather than a mock.
 
 ### EPUB ↔ audiobook sync CLI (PRs #7, #8 — `77ca2e3`, `3b9711d`)
 
@@ -157,6 +187,7 @@ No fork branches are currently unmerged — everything in sections 1–3 is on `
 ### Known deferred items
 
 - **Major dependency bumps.** After PR #10 the remaining **13 advisories all require breaking majors**, so there is no safe fruit left to pick: `axios` → 1.x, `nodemailer` → 9.x, and the `sqlite3` → 6.x native-module cluster (`sqlite3`, `tar`, `node-gyp`, `make-fetch-happen`, `cacache`). The last remaining **critical (`tar`)** is inside that cluster, so only the `sqlite3` bump can clear it. `sqlite3` is a compiled native module on the database path — verify the DB opens and migrations run, not just that the unit tests pass.
+- **React fork upstream sync.** `rusty324/audiobookshelf-client-react` is behind `audiobookshelf/audiobookshelf-client-react` and cannot be synced from this environment (outbound fetch to the upstream remote is blocked). Use GitHub's **Sync fork → Update branch** button, then reconcile; the ports above touch shared player and UI components, so expect conflicts.
 - **`LibraryItem.hasAudioTracks`** is defined as _both_ a getter and a method; the method wins, so property-style call sites (`libraryItem.hasAudioTracks`) get a truthy function reference instead of a boolean and those guards never fire. Left as an ESLint warning pending a focused fix.
 
 ---
@@ -188,6 +219,7 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 | **Series reorder buttons**     | ✅ **Ported** — React PR #1 (`469430d`)                                                                                             |
 | **Sleep timer auto-rewind**    | ✅ **Ported** — React PR #2 (`db3d201`)                                                                                             |
 | **Listening log**              | ✅ **Ported** — React PR #3 (`5dddbd3`), log UI **and** player event emission                                                       |
+| **JSON library export**        | ✅ **Ported** — React PR #4 (`4534650`)                                                                                             |
 | **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.         |
 | Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                               |
 | `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                            |
@@ -200,11 +232,13 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 - `src/components/ui/TwoStageMultiSelect.tsx` — passes both through (this is the series editor).
 - `src/components/widgets/BookDetailsEdit.tsx` — reorders `details.series` immutably.
 
-> ⚠️ **Unverified by a compiler.** The React repo could not be `pnpm install`ed in the environment that wrote the port — its `foliate-js` dependency is a git tarball from `codeload.github.com`, which was blocked (HTTP 403) — so `pnpm check` (lint + typecheck) and Cypress never ran. Prettier, a TypeScript syntax parse and standalone logic tests of the reorder algorithm all passed. **Run `pnpm check` locally before relying on it.**
+> ⚠️ **None of the React ports have been verified by a compiler.** The React repo could not be `pnpm install`ed in the environment that wrote them — its `foliate-js` dependency is a git tarball from `codeload.github.com`, which was blocked (HTTP 403) — so `pnpm check` (lint + typecheck) and Cypress never ran for **any** of React PRs #1–#4. What did pass: Prettier, a TypeScript syntax parse, and standalone logic tests where the change had testable logic. **Run `pnpm check` locally before relying on any of them.**
 
 **Sleep timer auto-rewind port** mirrors the Vue behavior with the same setting and defaults. `getAutoRewindTarget` lives in `src/lib/player/sleepTimerUtils.ts`; the rewind runs in `handleSleepTimerEnd` (`usePlayerControlsState.ts`), where `seek` and `getCurrentTime` are already in scope; the amount persists in `usePlayerSettings`.
 
 **Listening log port** reads the same API, so no server work was needed. `fetchPlaybackEventsAction` / `recordPlaybackEventsAction` are server actions (`apiRequest` is server-only, so client components cannot call it directly), the event types live in `src/types/api.ts` rather than the actions file (a `'use server'` module should export only async functions), and `usePlaybackEventLog` buffers and flushes emission the way `PlayerHandler` does on the Vue side. Two React-specific details differ from Vue: `seek` reads the origin **before** moving, because the React seek can resolve asynchronously; and `playerStateRef` is assigned **before** `setPlayerState`, which is batched, so rapid successive state changes cannot compare against a stale previous value.
+
+**JSON library export port** calls the same `/api/libraries/books-export` endpoint, so no server work was needed. `fetchBooksExport` is a server action (`apiRequest` is server-only) and the Blob download happens in `LibrariesClient.tsx`. `SettingsContent.tsx` gained an optional `secondaryButton` prop rendered before the existing add button — additive, so every other settings page is unaffected.
 
 **If the organize UI is ported later,** the React targets are `src/components/widgets/Tools.tsx` (Tools is a page here, not a modal tab), `src/components/widgets/media-card/MediaCardMoreMenu.tsx` (declarative `MediaCardMoreMenuItem[]`), and `src/lib/api.ts` for the call.
 
