@@ -10,6 +10,8 @@
 
         <div class="grow" />
 
+        <ui-btn color="bg-primary" small :loading="exporting" class="mr-2" @click="exportBooksJson">{{ $strings.ButtonExportBooksJson }}</ui-btn>
+
         <ui-btn color="bg-primary" small @click="setShowLibraryModal()">{{ $strings.ButtonAddLibrary }}</ui-btn>
       </template>
       <tables-library-libraries-table @showLibraryModal="setShowLibraryModal" class="pt-2" />
@@ -27,12 +29,36 @@ export default {
   },
   data() {
     return {
+      exporting: false,
       showLibraryModal: false,
       selectedLibrary: null
     }
   },
   computed: {},
   methods: {
+    /**
+     * Download a JSON listing of every book across all accessible book libraries.
+     */
+    async exportBooksJson() {
+      this.exporting = true
+
+      const entries = await this.$axios.$get('/api/libraries/books-export').catch((error) => {
+        console.error('Failed to export books', error)
+        return null
+      })
+
+      this.exporting = false
+      if (!entries) {
+        this.$toast.error(this.$strings.ToastExportBooksFailed)
+        return
+      }
+
+      const blob = new Blob([JSON.stringify(entries, null, 2)], { type: 'application/json' })
+      const blobUrl = URL.createObjectURL(blob)
+      this.$downloadFile(blobUrl, 'audiobookshelf-books.json')
+      // Release the object URL once the download has been handed off
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 1000)
+    },
     setShowLibraryModal(selectedLibrary) {
       this.selectedLibrary = selectedLibrary
       this.showLibraryModal = true

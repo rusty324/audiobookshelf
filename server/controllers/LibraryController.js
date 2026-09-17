@@ -9,6 +9,7 @@ const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilter
 const libraryItemFilters = require('../utils/queries/libraryItemFilters')
 const seriesFilters = require('../utils/queries/seriesFilters')
 const fileUtils = require('../utils/fileUtils')
+const libraryExport = require('../utils/libraryExport')
 const { createNewSortInstance } = require('../libs/fastSort')
 const naturalSort = createNewSortInstance({
   comparer: new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -209,6 +210,67 @@ class LibraryController {
     res.json({
       libraries
     })
+  }
+
+  /**
+   * GET: /api/libraries/books-export
+   *
+   * A flat JSON listing of every book across all book libraries the user can
+   * access, for use outside Audiobookshelf.
+   *
+   * Books with neither an audiobook nor an ebook are omitted, since the export
+   * describes what the library actually holds.
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   */
+  async getBooksExport(req, res) {
+    let libraries = await Database.libraryModel.getAllWithFolders()
+
+    const librariesAccessible = req.user.permissions?.librariesAccessible || []
+    if (librariesAccessible.length) {
+      libraries = libraries.filter((lib) => librariesAccessible.includes(lib.id))
+    }
+
+    const bookLibraryIds = libraries.filter((lib) => lib.mediaType === 'book').map((lib) => lib.id)
+    if (!bookLibraryIds.length) {
+      return res.json([])
+    }
+
+    const libraryItems = await Database.libraryItemModel.findAllExpandedWhere({
+      libraryId: bookLibraryIds,
+      mediaType: 'book'
+    })
+
+    const entries = []
+    for (const libraryItem of libraryItems) {
+      // Tag-restricted users may not see every item in a library they can access
+      if (!req.user.checkCanAccessLibraryItem(libraryItem)) continue
+
+      const book = libraryItem.media
+      if (!book) continue
+
+      const entry = libraryExport.buildExportEntry({
+        libraryItemId: libraryItem.id,
+        book: {
+          title: book.title,
+          subtitle: book.subtitle,
+          authors: book.authors || [],
+          // findAllExpandedWhere orders series by bookSeries.createdAt, so the
+          // last entry here is the book's most recent series
+          series: (book.series || []).map((se) => ({ name: se.name, sequence: se.bookSeries?.sequence || '' })),
+          genres: book.genres || [],
+          audioFiles: book.audioFiles || [],
+          ebookFile: book.ebookFile,
+          coverPath: book.coverPath
+        }
+      })
+
+      if (entry) entries.push(entry)
+    }
+
+    Logger.info(`[LibraryController] Exporting ${entries.length} books for user "${req.user.username}"`)
+    res.json(entries)
   }
 
   /**
