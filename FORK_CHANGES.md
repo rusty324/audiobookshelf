@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 17
-- **Net divergence:** 67 files changed, 6072 insertions(+), 389 deletions(-)
+- **Fork-only commits on `origin/master`:** 19
+- **Net divergence:** 67 files changed, 6145 insertions(+), 389 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -187,7 +187,6 @@ No fork branches are currently unmerged — everything in sections 1–3 is on `
 ### Known deferred items
 
 - **Major dependency bumps.** After PR #10 the remaining **13 advisories all require breaking majors**, so there is no safe fruit left to pick: `axios` → 1.x, `nodemailer` → 9.x, and the `sqlite3` → 6.x native-module cluster (`sqlite3`, `tar`, `node-gyp`, `make-fetch-happen`, `cacache`). The last remaining **critical (`tar`)** is inside that cluster, so only the `sqlite3` bump can clear it. `sqlite3` is a compiled native module on the database path — verify the DB opens and migrations run, not just that the unit tests pass.
-- **React fork upstream sync.** `rusty324/audiobookshelf-client-react` is behind `audiobookshelf/audiobookshelf-client-react` and cannot be synced from this environment (outbound fetch to the upstream remote is blocked). Use GitHub's **Sync fork → Update branch** button, then reconcile; the ports above touch shared player and UI components, so expect conflicts.
 - **`LibraryItem.hasAudioTracks`** is defined as _both_ a getter and a method; the method wins, so property-style call sites (`libraryItem.hasAudioTracks`) get a truthy function reference instead of a boolean and those guards never fire. Left as an ESLint warning pending a focused fix.
 
 ---
@@ -212,6 +211,18 @@ Scale: 51 routes, 471 `.tsx` files, 286 components, 38 Cypress component specs. 
 
 It can be tried without building from source: `ghcr.io/audiobookshelf/audiobookshelf-react:latest` is published per commit. Its README recommends pointing it at a **separate config and libraries**, not a production server.
 
+### React fork sync history
+
+| Synced         | Fork tip   | Upstream tip                  | Real content brought in                        |
+| -------------- | ---------- | ----------------------------- | ---------------------------------------------- |
+| **2026-09-17** | `44694f9f` | `925bf21f` (upstream PR #283) | Modal back-button handling — 6 files, +826/−45 |
+
+Done through GitHub's **Sync fork → Update branch**, since outbound fetch to the upstream remote is blocked from the environment these changes were written in.
+
+> ℹ️ **The commit count for this sync is misleading.** `git` reports **2355** incoming commits dating back to 2025-06, but every one of them arrives through a single upstream merge (PR #283, `codex/recover-pr-272`), whose second parent carries 2354 commits while contributing only 6 files of actual content. It is a re-created branch with duplicated history, not a backlog of unreviewed work. **Judge a sync by `git diff --shortstat <base> <upstream-tip>`, not by the commit count.**
+
+The sync was expected to conflict with the ports and **did not** — there was **zero file overlap** with the 19 files the ports touch. The quieter failure (a clean text merge leaving semantically broken code) was checked for too: `Modal.tsx`'s change is internal and its props are unchanged, so `SleepTimerModal` is unaffected, and the slimmed `useUnsavedNavigationGuard` is consumed only by `BatchEditClient.tsx` and `LibrariesDropdown.tsx`, neither of which the ports touch.
+
 ### Porting status
 
 | Fork feature                   | Status in the React fork                                                                                                            |
@@ -232,7 +243,11 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 - `src/components/ui/TwoStageMultiSelect.tsx` — passes both through (this is the series editor).
 - `src/components/widgets/BookDetailsEdit.tsx` — reorders `details.series` immutably.
 
-> ⚠️ **None of the React ports have been verified by a compiler.** The React repo could not be `pnpm install`ed in the environment that wrote them — its `foliate-js` dependency is a git tarball from `codeload.github.com`, which was blocked (HTTP 403) — so `pnpm check` (lint + typecheck) and Cypress never ran for **any** of React PRs #1–#4. What did pass: Prettier, a TypeScript syntax parse, and standalone logic tests where the change had testable logic. **Run `pnpm check` locally before relying on any of them.**
+> ✅ **`pnpm check` passes across all four ports** (verified 2026-09-18, after the upstream sync): `eslint .` 0, `tsc --noEmit` 0, `tsc --noEmit -p cypress/tsconfig.json` 0, `find-hardcoded-strings` 0 findings.
+>
+> Getting there needed a workaround, because `pnpm install` still fails in this environment: the `foliate-js` dependency is a git tarball from `codeload.github.com`, which is blocked (HTTP 403 — an outbound policy denial, not a transient error). 569 of 570 packages resolve normally, so the checks were run on a `git archive` copy outside the working tree with that one dependency pointed at a local stub. **The stub cannot affect type results:** `src/types/foliate-js.d.ts` declares `foliate-js/view.js` and `foliate-js/comic-book.js` as ambient modules, so TypeScript resolves those imports from the declaration file rather than from `node_modules` — the stub only satisfies the installer.
+>
+> ⚠️ **Still not run: the Cypress component suite.** It needs a browser and the real `foliate-js` at runtime, which the stub deliberately is not.
 
 **Sleep timer auto-rewind port** mirrors the Vue behavior with the same setting and defaults. `getAutoRewindTarget` lives in `src/lib/player/sleepTimerUtils.ts`; the rewind runs in `handleSleepTimerEnd` (`usePlayerControlsState.ts`), where `seek` and `getCurrentTime` are already in scope; the amount persists in `usePlayerSettings`.
 
