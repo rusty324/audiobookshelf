@@ -213,15 +213,36 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 
 ### React fork sync history
 
-| Synced         | Fork tip   | Upstream tip                  | Real content brought in                        |
-| -------------- | ---------- | ----------------------------- | ---------------------------------------------- |
-| **2026-09-17** | `44694f9f` | `925bf21f` (upstream PR #283) | Modal back-button handling — 6 files, +826/−45 |
-
 Done through GitHub's **Sync fork → Update branch**, since outbound fetch to the upstream remote is blocked from the environment these changes were written in.
 
-> ℹ️ **The commit count for this sync is misleading.** `git` reports **2355** incoming commits dating back to 2025-06, but every one of them arrives through a single upstream merge (PR #283, `codex/recover-pr-272`), whose second parent carries 2354 commits while contributing only 6 files of actual content. It is a re-created branch with duplicated history, not a backlog of unreviewed work. **Judge a sync by `git diff --shortstat <base> <upstream-tip>`, not by the commit count.**
+| Synced         | Fork tip   | Upstream tip            | Real content brought in                                                            | Overlap with ports                  |
+| -------------- | ---------- | ----------------------- | ---------------------------------------------------------------------------------- | ----------------------------------- |
+| **2026-09-17** | `44694f9f` | `925bf21f` (2026-09-17) | Modal back-button handling — 6 files, +826/−45                                     | None                                |
+| **2026-09-27** | `225875f3` | `e51a8291` (2026-09-25) | Button foreground colors + `useDetailsEdit` change detection — 69 files, +263/−187 | `BookDetailsEdit.tsx`, `en-us.json` |
 
-The sync was expected to conflict with the ports and **did not** — there was **zero file overlap** with the 19 files the ports touch. The quieter failure (a clean text merge leaving semantically broken code) was checked for too: `Modal.tsx`'s change is internal and its props are unchanged, so `SleepTimerModal` is unaffected, and the slimmed `useUnsavedNavigationGuard` is consumed only by `BatchEditClient.tsx` and `LibrariesDropdown.tsx`, neither of which the ports touch.
+After each sync the fork's divergence has stayed at exactly **19 files, +549/−10** — unchanged, which is the quickest confirmation that nothing was lost in a merge.
+
+> ℹ️ **Do not read the incoming commit count as a measure of a sync.** The 2026-09-17 sync reported **2355** incoming commits dating back to 2025-06, yet all of them arrived through a single upstream merge (PR #283, `codex/recover-pr-272`) whose second parent carried 2354 commits while contributing 6 files — a re-created branch with duplicated history, not a backlog. The 2026-09-27 sync's count of 40 was honest. **Judge a sync by `git diff --shortstat <prev-upstream-tip> <new-upstream-tip>`.**
+
+#### What each sync was checked for
+
+A clean text merge is not evidence the ports still work, so each sync is also checked for changes that compile but break behavior.
+
+**2026-09-17 — no overlap.** Zero of the 19 ported files were touched. `Modal.tsx`'s change is internal with unchanged props, so `SleepTimerModal` is unaffected, and the slimmed `useUnsavedNavigationGuard` is consumed only by `BatchEditClient.tsx` and `LibrariesDropdown.tsx`.
+
+**2026-09-27 — overlap, and one genuine near-miss.** `BookDetailsEdit.tsx` was edited on both sides; the merge kept upstream's `publishedYear`/`authors`/`sequence` normalization _and_ the `onItemMoved`/`orderable` wiring. `en-us.json` merged from both sides — valid JSON, no duplicate keys, fork keys intact.
+
+The near-miss is in `useDetailsEdit.ts`, where upstream replaced array change detection with `stringArraysEqual`, which is **order-insensitive**. Series reorder is entirely about order: had series taken that path, reordering would have produced no unsaved-changes state, the save button would never enable, and the feature would look broken **while typechecking cleanly**. It does not take that path — the branch is guarded by `currentValue.every((item) => typeof item !== 'object')`, and series entries are objects, so they fall through to the order-sensitive `JSON.stringify` comparison. Verified against the merged code, not assumed:
+
+```
+PASS  series reorder (2) detected          PASS  genres reorder NOT flagged (by design)
+PASS  series unchanged not flagged         PASS  genres add flagged
+PASS  series reorder (3, middle swap)
+```
+
+**Re-check this on every sync.** If upstream ever moves object arrays onto an order-insensitive comparison, series reorder breaks silently and no automated check in the repo will catch it.
+
+> ⚠️ **Upstream defect noticed in passing** (not introduced here, not blocking): `stringArraysEqual` is `a.length === b.length && a.every((i) => b.includes(i))`, so `['a','a','b']` and `['a','b','b']` compare equal. It affects duplicate-containing string arrays — tags, genres, narrators — where an edit could go silently unsaved. The UI appears to dedupe those fields, so it is close to theoretical.
 
 ### Porting status
 
@@ -243,7 +264,7 @@ The sync was expected to conflict with the ports and **did not** — there was *
 - `src/components/ui/TwoStageMultiSelect.tsx` — passes both through (this is the series editor).
 - `src/components/widgets/BookDetailsEdit.tsx` — reorders `details.series` immutably.
 
-> ✅ **`pnpm check` passes across all four ports** (verified 2026-09-18, after the upstream sync): `eslint .` 0, `tsc --noEmit` 0, `tsc --noEmit -p cypress/tsconfig.json` 0, `find-hardcoded-strings` 0 findings.
+> ✅ **`pnpm check` passes across all four ports** (re-run 2026-09-27 against the merged tree, after the second upstream sync; first verified 2026-09-18): `eslint .` 0, `tsc --noEmit` 0, `tsc --noEmit -p cypress/tsconfig.json` 0, `find-hardcoded-strings` 0 findings.
 >
 > Getting there needed a workaround, because `pnpm install` still fails in this environment: the `foliate-js` dependency is a git tarball from `codeload.github.com`, which is blocked (HTTP 403 — an outbound policy denial, not a transient error). 569 of 570 packages resolve normally, so the checks were run on a `git archive` copy outside the working tree with that one dependency pointed at a local stub. **The stub cannot affect type results:** `src/types/foliate-js.d.ts` declares `foliate-js/view.js` and `foliate-js/comic-book.js` as ambient modules, so TypeScript resolves those imports from the declaration file rather than from `node_modules` — the stub only satisfies the installer.
 >
