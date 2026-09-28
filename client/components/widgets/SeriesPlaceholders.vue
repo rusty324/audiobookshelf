@@ -67,6 +67,9 @@
       </div>
       <p class="text-0.75e text-gray-400 uppercase tracking-wide shrink-0 px-2e hidden sm:block">{{ $strings.LabelNotInLibrary }}</p>
       <div v-if="canUpdate" class="flex items-center shrink-0">
+        <ui-tooltip :text="$strings.LabelPromoteToLibraryItem">
+          <ui-icon-btn icon="library_add" borderless :size="7" icon-font-size="1.1rem" :aria-label="$strings.LabelPromoteToLibraryItem" @click="promotePlaceholder(placeholder)" />
+        </ui-tooltip>
         <ui-icon-btn icon="edit" borderless :size="7" icon-font-size="1.1rem" :aria-label="$strings.ButtonEdit" @click="editPlaceholder(placeholder)" />
         <ui-icon-btn icon="close" borderless :size="7" icon-font-size="1.1rem" :aria-label="$strings.ButtonRemove" @click="removePlaceholder(placeholder)" />
       </div>
@@ -239,6 +242,26 @@ export default {
 
       this.dismissSuggestions()
       await this.loadPlaceholders()
+    },
+    async promotePlaceholder(placeholder) {
+      const payload = {
+        message: this.$getString('MessageConfirmPromotePlaceholder', [placeholder.title]),
+        callback: async (confirmed) => {
+          if (!confirmed) return
+          const result = await this.$axios.$post(`/api/series/${this.seriesId}/placeholders/${placeholder.id}/promote`).catch((error) => {
+            const message = error.response?.status === 409 ? error.response.data : this.$strings.ToastPromotePlaceholderFailed
+            this.$toast.error(message || this.$strings.ToastPromotePlaceholderFailed)
+            return null
+          })
+          if (!result) return
+          this.$toast.success(this.$strings.ToastPlaceholderPromoted)
+          await this.loadPlaceholders()
+          // The grid above picks the new book up from the server's 'item_added'
+          // socket event, the same path the scanner uses
+        },
+        type: 'yesNo'
+      }
+      this.$store.commit('globals/setConfirmPrompt', payload)
     },
     async removePlaceholder(placeholder) {
       const payload = {

@@ -15,6 +15,31 @@ const MaxSequenceLength = 50
 const Sources = ['manual', 'hardcover']
 
 /**
+ * Key set on a library item's `extraData` to mark it as a promoted
+ * placeholder - a book record with no files behind it.
+ *
+ * It lives in `extraData` because that JSON column already exists. A real
+ * column is not an option on this fork: sequelize.sync({ alter: false })
+ * never adds columns to an existing table, and migrations are version gated.
+ */
+const PlaceholderExtraDataKey = 'isPlaceholder'
+
+/**
+ * Whether a library item is a promoted placeholder rather than real media.
+ *
+ * Anything that treats a file-less item as broken must consult this first.
+ * A promoted placeholder has no path on disk by design, so the scanner would
+ * otherwise flag it `isMissing` on every run and the "remove items with
+ * issues" sweep would then delete it.
+ *
+ * @param {{ extraData?: object }} libraryItem
+ * @returns {boolean}
+ */
+function isPlaceholderLibraryItem(libraryItem) {
+  return !!libraryItem?.extraData?.[PlaceholderExtraDataKey]
+}
+
+/**
  * Canonical form of a series sequence for comparison.
  *
  * Sequences are free-text strings in Audiobookshelf ("1", "01", "1.5", "Book 2"),
@@ -183,6 +208,8 @@ function isDuplicate(input, existing) {
 
 module.exports = {
   Sources,
+  PlaceholderExtraDataKey,
+  isPlaceholderLibraryItem,
   MaxTitleLength,
   MaxSubtitleLength,
   MaxAuthorNameLength,

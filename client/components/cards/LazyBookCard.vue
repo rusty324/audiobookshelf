@@ -77,6 +77,14 @@
           <p v-if="seriesName" class="text-gray-200 text-center" :style="{ fontSize: 1.1 + 'em' }">{{ seriesName }}</p>
         </div>
 
+        <!-- Placeholder widget. Deliberately distinct from the error widget
+             below: a placeholder has no media by design, it is not broken. -->
+        <ui-tooltip v-if="isPlaceholder" :text="$strings.LabelNotInLibrary" plaintext class="absolute bottom-4e left-0 z-10">
+          <div :style="{ height: 1.5 + 'em', width: 2.5 + 'em' }" class="bg-gray-600 rounded-r-full shadow-md flex items-center justify-end border-r border-b border-gray-400">
+            <span class="material-symbols text-gray-200 pr-1e" :style="{ fontSize: 0.875 + 'em' }">bookmark_border</span>
+          </div>
+        </ui-tooltip>
+
         <!-- Error widget -->
         <ui-tooltip cy-id="ErrorTooltip" v-if="showError" :text="errorText" plaintext class="absolute bottom-4e left-0 z-10">
           <div :style="{ height: 1.5 + 'em', width: 2.5 + 'em' }" class="bg-error rounded-r-full shadow-md flex items-center justify-end border-r border-b border-red-300">
@@ -443,6 +451,9 @@ export default {
     },
     isMissing() {
       return this._libraryItem.isMissing
+    },
+    isPlaceholder() {
+      return !!this._libraryItem.isPlaceholder
     },
     isInvalid() {
       return this._libraryItem.isInvalid

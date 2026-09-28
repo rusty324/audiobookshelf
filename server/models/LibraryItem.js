@@ -491,11 +491,7 @@ class LibraryItem extends Model {
       }
       Logger.debug(`Loaded ${newestAuthorsPayload.authors.length} of ${newestAuthorsPayload.count} authors for "Newest Authors" in ${newestAuthorsResult.elapsedSeconds}s`)
     } else if (library.isPodcast) {
-      const [newestEpisodesResult, mostRecentResult, mediaFinishedResult] = await Promise.all([
-        timed(() => libraryFilters.getNewestPodcastEpisodes(library, user, limit)),
-        timed(() => libraryFilters.getLibraryItemsMostRecentlyAdded(library, user, include, limit)),
-        timed(() => libraryFilters.getMediaFinished(library, user, include, limit))
-      ])
+      const [newestEpisodesResult, mostRecentResult, mediaFinishedResult] = await Promise.all([timed(() => libraryFilters.getNewestPodcastEpisodes(library, user, limit)), timed(() => libraryFilters.getLibraryItemsMostRecentlyAdded(library, user, include, limit)), timed(() => libraryFilters.getMediaFinished(library, user, include, limit))])
 
       const newestEpisodesPayload = newestEpisodesResult.payload
       // "Newest Episodes" shelf
@@ -997,6 +993,9 @@ class LibraryItem extends Model {
       scanVersion: this.lastScanVersion,
       isMissing: !!this.isMissing,
       isInvalid: !!this.isInvalid,
+      // A promoted series placeholder: a book record with no files behind it.
+      // Not an error state - the client renders it differently from isMissing.
+      isPlaceholder: !!this.extraData?.isPlaceholder,
       mediaType: this.mediaType,
       media: this.media.toOldJSON(this.id),
       // LibraryFile JSON includes a fileType property that may not be saved in libraryFiles column in the database
@@ -1030,6 +1029,9 @@ class LibraryItem extends Model {
       updatedAt: this.updatedAt.valueOf(),
       isMissing: !!this.isMissing,
       isInvalid: !!this.isInvalid,
+      // A promoted series placeholder: a book record with no files behind it.
+      // Not an error state - the client renders it differently from isMissing.
+      isPlaceholder: !!this.extraData?.isPlaceholder,
       mediaType: this.mediaType,
       media: this.media.toOldJSONMinified(),
       numFiles: this.libraryFiles.length,

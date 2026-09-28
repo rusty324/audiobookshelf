@@ -241,6 +241,8 @@ class ApiRouter {
     // adding one later would, and this ordering makes that harmless.
     this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholdersBulk.bind(this))
     this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholderSuggestions.bind(this))
+    this.router.post('/series/:id/placeholders/:placeholderId/promote', SeriesController.placeholderMiddleware.bind(this), SeriesController.promotePlaceholder.bind(this))
+    this.router.delete('/series/:id/promoted/:libraryItemId', SeriesController.placeholderMiddleware.bind(this), SeriesController.demotePlaceholder.bind(this))
     this.router.patch('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.updatePlaceholder.bind(this))
     this.router.delete('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.deletePlaceholder.bind(this))
 
