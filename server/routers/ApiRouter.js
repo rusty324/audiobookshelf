@@ -236,6 +236,11 @@ class ApiRouter {
     // '/series/:id' above, since these paths have an extra segment.
     this.router.get('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholders.bind(this))
     this.router.post('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholder.bind(this))
+    // 'bulk' is registered ahead of the ':placeholderId' routes below. There is
+    // no POST on ':placeholderId' today so nothing currently shadows it, but
+    // adding one later would, and this ordering makes that harmless.
+    this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholdersBulk.bind(this))
+    this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholderSuggestions.bind(this))
     this.router.patch('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.updatePlaceholder.bind(this))
     this.router.delete('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.deletePlaceholder.bind(this))
 

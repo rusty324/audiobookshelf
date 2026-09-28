@@ -84,6 +84,10 @@ class ServerSettings {
     this.authOpenIDAdvancedPermsClaim = ''
     this.authOpenIDSubfolderForRedirectURLs = undefined
 
+    // Hardcover (https://hardcover.app) API token, used to list the books in a
+    // series for series placeholders. Optional; the feature is hidden without it.
+    this.hardcoverApiKey = null
+
     if (settings) {
       this.construct(settings)
     }
@@ -138,6 +142,7 @@ class ServerSettings {
     this.authOpenIDLogoutURL = settings.authOpenIDLogoutURL || null
     this.authOpenIDClientID = settings.authOpenIDClientID || null
     this.authOpenIDClientSecret = settings.authOpenIDClientSecret || null
+    this.hardcoverApiKey = settings.hardcoverApiKey || null
     this.authOpenIDTokenSigningAlgorithm = settings.authOpenIDTokenSigningAlgorithm || 'RS256'
     this.authOpenIDButtonText = settings.authOpenIDButtonText || 'Login with OpenId'
     this.authOpenIDAutoLaunch = !!settings.authOpenIDAutoLaunch
@@ -248,6 +253,7 @@ class ServerSettings {
       authOpenIDLogoutURL: this.authOpenIDLogoutURL,
       authOpenIDClientID: this.authOpenIDClientID, // Do not return to client
       authOpenIDClientSecret: this.authOpenIDClientSecret, // Do not return to client
+      hardcoverApiKey: this.hardcoverApiKey, // Do not return to client
       authOpenIDTokenSigningAlgorithm: this.authOpenIDTokenSigningAlgorithm,
       authOpenIDButtonText: this.authOpenIDButtonText,
       authOpenIDAutoLaunch: this.authOpenIDAutoLaunch,
@@ -277,6 +283,9 @@ class ServerSettings {
     delete json.tokenSecret
     delete json.authOpenIDClientID
     delete json.authOpenIDClientSecret
+    delete json.hardcoverApiKey
+    // The client needs to know whether the lookup is available, never the key itself
+    json.hardcoverEnabled = !!this.hardcoverApiKey
     delete json.authOpenIDMobileRedirectURIs
     delete json.authOpenIDGroupClaim
     delete json.authOpenIDAdvancedPermsClaim
