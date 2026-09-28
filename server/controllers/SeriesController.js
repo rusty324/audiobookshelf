@@ -8,6 +8,7 @@ const RssFeedManager = require('../managers/RssFeedManager')
 const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilters')
 const seriesPlaceholders = require('../utils/seriesPlaceholders')
 const hardcoverSeries = require('../utils/hardcoverSeries')
+const { getTitleIgnorePrefix } = require('../utils/index')
 const Hardcover = require('../providers/Hardcover')
 
 const hardcover = new Hardcover()
@@ -305,6 +306,151 @@ class SeriesController {
     }
 
     res.json({ added: toCreate.length, skipped })
+  }
+
+  /**
+   * POST /api/series/:id/placeholders/:placeholderId/promote
+   *
+   * Turn a placeholder into a real library item with no files behind it, so
+   * it shows up everywhere books do - the library grid in series order,
+   * search, the author page - rather than only in the series panel.
+   *
+   * The item is marked in `extraData` so the scanner and the issue sweep skip
+   * it; see utils/seriesPlaceholders.isPlaceholderLibraryItem. Reversible via
+   * the demote route below.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async promotePlaceholder(req, res) {
+    const placeholder = await Database.seriesPlaceholderModel.findOne({
+      where: { id: req.params.placeholderId, seriesId: req.series.id }
+    })
+    if (!placeholder) return res.sendStatus(404)
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    if (seriesPlaceholders.conflictsWithLibrary({ title: placeholder.title, sequence: placeholder.sequence }, booksInSeries)) {
+      return res.status(409).send('A book matching this placeholder is already in the library')
+    }
+
+    const transaction = await Database.sequelize.transaction()
+    try {
+      const book = await Database.bookModel.create(
+        {
+          title: placeholder.title,
+          titleIgnorePrefix: getTitleIgnorePrefix(placeholder.title),
+          subtitle: placeholder.subtitle,
+          narrators: [],
+          audioFiles: [],
+          chapters: [],
+          tags: [],
+          genres: []
+        },
+        { transaction }
+      )
+
+      const libraryItem = await Database.libraryItemModel.create(
+        {
+          libraryId: req.series.libraryId,
+          mediaId: book.id,
+          mediaType: 'book',
+          // No path, ino or libraryFiles: there is nothing on disk. isMissing
+          // stays false deliberately - this item is not broken, it is empty.
+          isFile: false,
+          isMissing: false,
+          isInvalid: false,
+          libraryFiles: [],
+          title: placeholder.title,
+          titleIgnorePrefix: getTitleIgnorePrefix(placeholder.title),
+          authorNamesFirstLast: placeholder.authorName || null,
+          authorNamesLastFirst: placeholder.authorName || null,
+          extraData: { [seriesPlaceholders.PlaceholderExtraDataKey]: true }
+        },
+        { transaction }
+      )
+
+      await Database.bookSeriesModel.create(
+        {
+          bookId: book.id,
+          seriesId: req.series.id,
+          sequence: placeholder.sequence || null
+        },
+        { transaction }
+      )
+
+      await placeholder.destroy({ transaction })
+      await transaction.commit()
+
+      Logger.info(`[SeriesController] Promoted placeholder "${placeholder.title}" to a library item in series "${req.series.name}"`)
+
+      // Same event the scanner emits for a new item, so open bookshelves pick
+      // it up without a reload
+      const expanded = await Database.libraryItemModel.getExpandedById(libraryItem.id)
+      if (expanded) SocketAuthority.libraryItemEmitter('item_added', expanded)
+
+      res.json({ libraryItemId: libraryItem.id })
+    } catch (error) {
+      await transaction.rollback()
+      Logger.error(`[SeriesController] Failed to promote placeholder: ${error.message}`)
+      res.status(500).send('Failed to promote placeholder')
+    }
+  }
+
+  /**
+   * DELETE /api/series/:id/promoted/:libraryItemId
+   *
+   * Turn a promoted placeholder back into a plain placeholder entry. Refuses
+   * anything that is not a promoted placeholder, so this can never be used to
+   * delete real media.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async demotePlaceholder(req, res) {
+    const libraryItem = await Database.libraryItemModel.findByPk(req.params.libraryItemId, {
+      include: {
+        model: Database.bookModel,
+        include: { model: Database.bookSeriesModel }
+      }
+    })
+    if (!libraryItem) return res.sendStatus(404)
+
+    if (!seriesPlaceholders.isPlaceholderLibraryItem(libraryItem)) {
+      Logger.warn(`[SeriesController] Refusing to demote library item "${libraryItem.id}" - it is not a promoted placeholder`)
+      return res.status(400).send('That library item is not a placeholder')
+    }
+
+    const bookSeries = libraryItem.media?.bookSeries?.find((bs) => bs.seriesId === req.series.id)
+    if (!bookSeries) {
+      return res.status(400).send('That library item is not in this series')
+    }
+
+    const transaction = await Database.sequelize.transaction()
+    try {
+      await Database.seriesPlaceholderModel.create(
+        {
+          seriesId: req.series.id,
+          title: libraryItem.media.title,
+          subtitle: libraryItem.media.subtitle,
+          sequence: bookSeries.sequence || '',
+          authorName: libraryItem.authorNamesFirstLast || null,
+          source: 'manual'
+        },
+        { transaction }
+      )
+      // Destroying the library item cascades to the book and its bookSeries row
+      await libraryItem.destroy({ transaction })
+      await Database.bookModel.destroy({ where: { id: libraryItem.mediaId }, transaction })
+      await transaction.commit()
+
+      Logger.info(`[SeriesController] Demoted "${libraryItem.title}" back to a placeholder`)
+      SocketAuthority.libraryItemEmitter('item_removed', libraryItem)
+      res.sendStatus(200)
+    } catch (error) {
+      await transaction.rollback()
+      Logger.error(`[SeriesController] Failed to demote placeholder: ${error.message}`)
+      res.status(500).send('Failed to demote placeholder')
+    }
   }
 
   /**

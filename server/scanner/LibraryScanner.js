@@ -9,6 +9,7 @@ const fileUtils = require('../utils/fileUtils')
 const scanUtils = require('../utils/scandir')
 const { LogLevel, ScanResult } = require('../utils/constants')
 const libraryFilters = require('../utils/queries/libraryFilters')
+const { isPlaceholderLibraryItem } = require('../utils/seriesPlaceholders')
 const TaskManager = require('../managers/TaskManager')
 const LibraryItemScanner = require('./LibraryItemScanner')
 const LibraryScan = require('./LibraryScan')
@@ -158,11 +159,16 @@ class LibraryScanner {
 
     if (this.shouldCancelScan(libraryScan)) return true
 
-    const existingLibraryItems = await Database.libraryItemModel.findAll({
-      where: {
-        libraryId: libraryScan.libraryId
-      }
-    })
+    // Promoted series placeholders are book records with no files behind them,
+    // deliberately. They must be excluded here or every scan would flag them
+    // as missing and the "remove items with issues" sweep would delete them.
+    const existingLibraryItems = (
+      await Database.libraryItemModel.findAll({
+        where: {
+          libraryId: libraryScan.libraryId
+        }
+      })
+    ).filter((li) => !isPlaceholderLibraryItem(li))
 
     if (this.shouldCancelScan(libraryScan)) return true
 

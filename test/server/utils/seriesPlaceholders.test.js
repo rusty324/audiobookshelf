@@ -1,7 +1,7 @@
 const chai = require('chai')
 const expect = chai.expect
 
-const { normalizeSequence, normalizeTitle, compareSequences, isFulfilled, filterUnfulfilled, sanitizePlaceholderInput, conflictsWithLibrary, isDuplicate, MaxTitleLength, MaxSequenceLength } = require('../../../server/utils/seriesPlaceholders')
+const { isPlaceholderLibraryItem, PlaceholderExtraDataKey, normalizeSequence, normalizeTitle, compareSequences, isFulfilled, filterUnfulfilled, sanitizePlaceholderInput, conflictsWithLibrary, isDuplicate, MaxTitleLength, MaxSequenceLength } = require('../../../server/utils/seriesPlaceholders')
 
 describe('seriesPlaceholders', () => {
   describe('normalizeSequence', () => {
@@ -193,6 +193,30 @@ describe('seriesPlaceholders', () => {
     it('allows a placeholder for a genuine gap', () => {
       const books = [{ sequence: '1', title: 'Storm Front' }]
       expect(conflictsWithLibrary({ sequence: '2', title: 'Fool Moon' }, books)).to.be.false
+    })
+  })
+
+  describe('isPlaceholderLibraryItem', () => {
+    it('recognizes a promoted placeholder', () => {
+      expect(isPlaceholderLibraryItem({ extraData: { [PlaceholderExtraDataKey]: true } })).to.be.true
+    })
+
+    it('does not treat an ordinary item as a placeholder', () => {
+      expect(isPlaceholderLibraryItem({ extraData: {} })).to.be.false
+      expect(isPlaceholderLibraryItem({ extraData: { oldLibraryItemId: 'abc' } })).to.be.false
+    })
+
+    it('is false rather than throwing when extraData is absent', () => {
+      // The issue sweep selects a narrow column list, so extraData can be
+      // undefined if that query is ever changed
+      expect(isPlaceholderLibraryItem({})).to.be.false
+      expect(isPlaceholderLibraryItem({ extraData: null })).to.be.false
+      expect(isPlaceholderLibraryItem(null)).to.be.false
+      expect(isPlaceholderLibraryItem(undefined)).to.be.false
+    })
+
+    it('is false for a falsy flag value', () => {
+      expect(isPlaceholderLibraryItem({ extraData: { [PlaceholderExtraDataKey]: false } })).to.be.false
     })
   })
 
