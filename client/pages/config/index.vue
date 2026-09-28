@@ -80,6 +80,24 @@
             </ui-tooltip>
           </div>
 
+          <!-- Hardcover is the only supported provider that can list the books in a
+               series, which is what the series placeholder lookup needs. Write only:
+               the key is never sent back to the client, so the field shows whether
+               one is set rather than its value. -->
+          <div role="article" :aria-label="$strings.LabelSettingsHardcoverApiKeyHelp" class="py-2">
+            <div class="flex items-center">
+              <p class="pr-2">{{ $strings.LabelSettingsHardcoverApiKey }}</p>
+              <ui-tooltip aria-hidden="true" :text="$strings.LabelSettingsHardcoverApiKeyHelp">
+                <span class="material-symbols icon-text">info</span>
+              </ui-tooltip>
+            </div>
+            <div class="flex items-center pt-1">
+              <ui-text-input v-model="hardcoverApiKey" type="password" :disabled="updatingServerSettings" :placeholder="hardcoverKeyPlaceholder" class="w-72 text-sm" />
+              <ui-btn small color="bg-primary" class="ml-2" :disabled="updatingServerSettings" @click="saveHardcoverApiKey">{{ $strings.ButtonSave }}</ui-btn>
+              <ui-btn v-if="newServerSettings.hardcoverEnabled" small color="bg-primary" class="ml-2" :disabled="updatingServerSettings" @click="clearHardcoverApiKey">{{ $strings.ButtonClear }}</ui-btn>
+            </div>
+          </div>
+
           <div role="article" :aria-label="$strings.LabelSettingsEnableWatcherHelp" class="flex items-center py-2">
             <ui-toggle-switch :label="$strings.LabelSettingsEnableWatcher" v-model="scannerEnableWatcher" :disabled="updatingServerSettings" @input="(val) => updateSettingsKey('scannerDisableWatcher', !val)" />
             <ui-tooltip aria-hidden="true" :text="$strings.LabelSettingsEnableWatcherHelp">
@@ -232,7 +250,8 @@ export default {
       hasPrefixesChanged: false,
       newServerSettings: {},
       showConfirmPurgeCache: false,
-      savingPrefixes: false
+      savingPrefixes: false,
+      hardcoverApiKey: ''
     }
   },
   watch: {
@@ -245,6 +264,11 @@ export default {
   computed: {
     serverSettings() {
       return this.$store.state.serverSettings
+    },
+    hardcoverKeyPlaceholder() {
+      // The key itself is never sent to the client, so the field can only
+      // report whether one is stored
+      return this.newServerSettings.hardcoverEnabled ? this.$strings.LabelSettingsHardcoverApiKeySet : this.$strings.LabelSettingsHardcoverApiKeyNotSet
     },
     providers() {
       // Use book cover providers for the cover provider dropdown
@@ -335,6 +359,21 @@ export default {
 
       this.newServerSettings.allowedOrigins = validOrigins
       this.updateSettingsKey('allowedOrigins', validOrigins)
+    },
+    saveHardcoverApiKey() {
+      const key = (this.hardcoverApiKey || '').trim()
+      if (!key) {
+        this.$toast.error(this.$strings.ToastHardcoverApiKeyRequired)
+        return
+      }
+      this.updateServerSettings({ hardcoverApiKey: key })
+      // The server never sends the key back, so there is nothing to show once
+      // it is saved; clearing the field avoids implying otherwise
+      this.hardcoverApiKey = ''
+    },
+    clearHardcoverApiKey() {
+      this.hardcoverApiKey = ''
+      this.updateServerSettings({ hardcoverApiKey: null })
     },
     updateSettingsKey(key, val) {
       if (key === 'scannerDisableWatcher') {

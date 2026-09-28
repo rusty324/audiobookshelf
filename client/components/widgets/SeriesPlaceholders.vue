@@ -5,6 +5,7 @@
       <div class="w-6e" />
       <p v-if="placeholders.length" class="text-0.9e text-gray-400">{{ placeholders.length }}</p>
       <div class="grow" />
+      <ui-btn v-if="canUpdate && hardcoverEnabled && !showAddForm && !suggestions.length" small color="bg-primary" class="mr-2e" :loading="loadingSuggestions" @click="findMissingBooks">{{ $strings.ButtonFindMissingBooks }}</ui-btn>
       <ui-btn v-if="canUpdate && !showAddForm" small color="bg-primary" @click="showAddForm = true">{{ $strings.ButtonAddMissingBook }}</ui-btn>
     </div>
 
@@ -29,7 +30,30 @@
       </div>
     </div>
 
-    <p v-if="!placeholders.length && !showAddForm" class="text-0.9e text-gray-400 italic">{{ $strings.MessageNoSeriesPlaceholders }}</p>
+    <!-- Hardcover suggestions, pending confirmation. Nothing is saved until
+         the user picks; the data is third-party and imperfect. -->
+    <div v-if="suggestions.length" class="w-full bg-primary/40 border border-white/10 rounded p-4e mb-4e">
+      <div class="flex items-center mb-2e">
+        <p class="text-1e font-semibold">{{ $getString('HeaderSuggestedFromHardcover', [matchedSeriesName]) }}</p>
+        <div class="grow" />
+        <ui-btn small color="bg-primary" @click="toggleSelectAll">{{ allSelected ? $strings.ButtonDeselectAll : $strings.ButtonSelectAll }}</ui-btn>
+      </div>
+      <p class="text-0.8e text-gray-400 mb-3e">{{ seriesCompletenessMessage }}</p>
+
+      <div v-for="(suggestion, index) in suggestions" :key="suggestion.sourceId || index" class="flex items-center py-1e">
+        <ui-checkbox v-model="selected[index]" :label="suggestion.title" checkbox-bg="primary" small label-class="pl-2e text-0.9e" />
+        <div class="grow" />
+        <p v-if="suggestion.sequence" class="text-0.8e font-mono text-gray-400 px-2e">#{{ suggestion.sequence }}</p>
+        <p v-if="suggestion.releaseYear" class="text-0.75e text-gray-500">{{ suggestion.releaseYear }}</p>
+      </div>
+
+      <div class="flex justify-end items-center pt-3e">
+        <ui-btn small color="bg-primary" class="mr-2e" @click="dismissSuggestions">{{ $strings.ButtonCancel }}</ui-btn>
+        <ui-btn small color="bg-success" :loading="addingSuggestions" :disabled="!selectedCount" @click="addSelectedSuggestions">{{ $getString('ButtonAddSelectedCount', [selectedCount]) }}</ui-btn>
+      </div>
+    </div>
+
+    <p v-if="!placeholders.length && !showAddForm && !suggestions.length" class="text-0.9e text-gray-400 italic">{{ $strings.MessageNoSeriesPlaceholders }}</p>
 
     <!-- Ghost entries -->
     <div v-for="placeholder in placeholders" :key="placeholder.id" class="flex items-center w-full border border-dashed border-white/20 rounded px-3e py-2e mb-2e opacity-60 hover:opacity-90 transition-opacity">
@@ -62,6 +86,12 @@ export default {
       saving: false,
       showAddForm: false,
       editingId: null,
+      loadingSuggestions: false,
+      addingSuggestions: false,
+      suggestions: [],
+      selected: [],
+      matchedSeriesName: '',
+      seriesIsCompleted: false,
       form: {
         title: '',
         sequence: '',
@@ -76,6 +106,20 @@ export default {
     show() {
       // Stay out of the way until there is something to show or something to do
       return this.loaded && (this.placeholders.length > 0 || this.canUpdate)
+    },
+    hardcoverEnabled() {
+      return !!this.$store.state.serverSettings?.hardcoverEnabled
+    },
+    selectedCount() {
+      return this.selected.filter(Boolean).length
+    },
+    allSelected() {
+      return this.suggestions.length > 0 && this.selectedCount === this.suggestions.length
+    },
+    seriesCompletenessMessage() {
+      // Whether the series is finished decides if this list can be trusted as
+      // the whole story or only what exists so far
+      return this.seriesIsCompleted ? this.$strings.MessageHardcoverSeriesComplete : this.$strings.MessageHardcoverSeriesOngoing
     }
   },
   methods: {
@@ -131,6 +175,71 @@ export default {
       this.cancelForm()
       await this.loadPlaceholders()
     },
+    async findMissingBooks() {
+      this.loadingSuggestions = true
+      const data = await this.$axios.$get(`/api/series/${this.seriesId}/placeholder-suggestions`).catch((error) => {
+        const status = error.response?.status
+        // 502 means Hardcover was reachable-but-unhelpful (no match, or an
+        // API error); worth distinguishing from a local failure
+        this.$toast.error(status === 502 ? this.$strings.ToastHardcoverLookupFailed : error.response?.data || this.$strings.ToastHardcoverLookupFailed)
+        return null
+      })
+      this.loadingSuggestions = false
+      if (!data) return
+
+      this.suggestions = data.suggestions || []
+      this.matchedSeriesName = data.matchedSeriesName || ''
+      this.seriesIsCompleted = !!data.isCompleted
+      this.selected = this.suggestions.map(() => true)
+
+      if (!this.suggestions.length) {
+        this.$toast.success(this.$strings.ToastHardcoverNoMissingBooks)
+      }
+    },
+    toggleSelectAll() {
+      const next = !this.allSelected
+      this.selected = this.suggestions.map(() => next)
+    },
+    dismissSuggestions() {
+      this.suggestions = []
+      this.selected = []
+      this.matchedSeriesName = ''
+      this.seriesIsCompleted = false
+    },
+    async addSelectedSuggestions() {
+      const chosen = this.suggestions.filter((_, index) => this.selected[index])
+      if (!chosen.length) return
+
+      this.addingSuggestions = true
+      const result = await this.$axios
+        .$post(`/api/series/${this.seriesId}/placeholders/bulk`, {
+          placeholders: chosen.map((suggestion) => ({
+            title: suggestion.title,
+            subtitle: suggestion.subtitle,
+            sequence: suggestion.sequence,
+            authorName: suggestion.authorName,
+            source: 'hardcover'
+          }))
+        })
+        .catch((error) => {
+          console.error('Failed to add suggested placeholders', error)
+          this.$toast.error(this.$strings.ToastSeriesPlaceholderFailed)
+          return null
+        })
+      this.addingSuggestions = false
+      if (!result) return
+
+      // Skipped entries are not an error - they are ones the library already
+      // covers - but saying nothing would look like the request half failed
+      if (result.skipped) {
+        this.$toast.success(this.$getString('ToastSeriesPlaceholdersAddedSomeSkipped', [result.added, result.skipped]))
+      } else {
+        this.$toast.success(this.$getString('ToastSeriesPlaceholdersAdded', [result.added]))
+      }
+
+      this.dismissSuggestions()
+      await this.loadPlaceholders()
+    },
     async removePlaceholder(placeholder) {
       const payload = {
         message: this.$getString('MessageConfirmRemoveSeriesPlaceholder', [placeholder.title]),
@@ -159,6 +268,7 @@ export default {
       this.loaded = false
       this.placeholders = []
       this.cancelForm()
+      this.dismissSuggestions()
       this.loadPlaceholders()
     }
   }

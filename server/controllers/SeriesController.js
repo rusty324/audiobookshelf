@@ -7,6 +7,13 @@ const RssFeedManager = require('../managers/RssFeedManager')
 
 const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilters')
 const seriesPlaceholders = require('../utils/seriesPlaceholders')
+const hardcoverSeries = require('../utils/hardcoverSeries')
+const Hardcover = require('../providers/Hardcover')
+
+const hardcover = new Hardcover()
+
+/** Cap on how many placeholders one bulk request may add. */
+const MaxBulkPlaceholders = 300
 
 /**
  * @typedef RequestUserObject
@@ -198,6 +205,106 @@ class SeriesController {
       await placeholder.save()
     }
     res.json(placeholder.toJSONForClient())
+  }
+
+  /**
+   * GET /api/series/:id/placeholder-suggestions
+   *
+   * Ask Hardcover what is in this series and return the entries that are
+   * neither in the library nor already recorded. Read-only on purpose: the
+   * data is third-party and imperfect, so nothing is written until the user
+   * picks from it.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async getPlaceholderSuggestions(req, res) {
+    // A GET, so placeholderMiddleware does not gate it, but it spends a
+    // third-party API call and is only actionable by someone who can add
+    // placeholders - so require the same permission here.
+    if (!req.user.canUpdate) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted a placeholder lookup without permission`)
+      return res.sendStatus(403)
+    }
+
+    const token = Database.serverSettings.hardcoverApiKey
+    if (!token) {
+      return res.status(400).send('No Hardcover API token configured')
+    }
+
+    const result = await hardcover.getSeriesProposals(req.series.name, token)
+    if (!result) {
+      return res.status(502).send('Could not look up this series on Hardcover')
+    }
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    const existing = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
+    const suggestions = hardcoverSeries.filterNewProposals(result.proposals, booksInSeries, existing)
+
+    res.json({
+      suggestions,
+      matchedSeriesName: result.series.name,
+      // Lets the client say "that is the complete series" rather than implying
+      // it when the series is still being written
+      isCompleted: result.isCompleted,
+      totalInSeries: result.proposals.length
+    })
+  }
+
+  /**
+   * POST /api/series/:id/placeholders/bulk
+   *
+   * Add several placeholders at once, which is how a whole series gets filled
+   * in. Entries that conflict with the library or duplicate an existing
+   * placeholder are skipped rather than failing the request, so a partly
+   * redundant selection still does something useful.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async createPlaceholdersBulk(req, res) {
+    const submitted = req.body?.placeholders
+    if (!Array.isArray(submitted) || !submitted.length) {
+      return res.status(400).send('No placeholders provided')
+    }
+    if (submitted.length > MaxBulkPlaceholders) {
+      return res.status(400).send(`Too many placeholders, maximum is ${MaxBulkPlaceholders}`)
+    }
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    const existing = (await Database.seriesPlaceholderModel.getForSeries(req.series.id)).map((p) => ({ title: p.title, sequence: p.sequence }))
+
+    const toCreate = []
+    let skipped = 0
+    for (const entry of submitted) {
+      const input = seriesPlaceholders.sanitizePlaceholderInput(entry)
+      if (!input) {
+        skipped++
+        continue
+      }
+      // Compare against what is already accepted in this same batch too,
+      // otherwise a duplicated entry in one request would be written twice
+      if (seriesPlaceholders.conflictsWithLibrary(input, booksInSeries) || seriesPlaceholders.isDuplicate(input, existing)) {
+        skipped++
+        continue
+      }
+      existing.push({ title: input.title, sequence: input.sequence })
+      toCreate.push({
+        seriesId: req.series.id,
+        title: input.title,
+        subtitle: input.subtitle,
+        sequence: input.sequence,
+        authorName: input.authorName,
+        source: input.source
+      })
+    }
+
+    if (toCreate.length) {
+      await Database.seriesPlaceholderModel.bulkCreate(toCreate)
+      Logger.info(`[SeriesController] Added ${toCreate.length} placeholders to series "${req.series.name}"`)
+    }
+
+    res.json({ added: toCreate.length, skipped })
   }
 
   /**
