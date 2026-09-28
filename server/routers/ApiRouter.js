@@ -231,6 +231,13 @@ class ApiRouter {
     //
     this.router.get('/series/:id', SeriesController.middleware.bind(this), SeriesController.findOne.bind(this))
     this.router.patch('/series/:id', SeriesController.middleware.bind(this), SeriesController.update.bind(this))
+    // Placeholders use their own middleware: same access check, but mutations
+    // need only canUpdate rather than canDelete. No ordering hazard against
+    // '/series/:id' above, since these paths have an extra segment.
+    this.router.get('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholders.bind(this))
+    this.router.post('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholder.bind(this))
+    this.router.patch('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.updatePlaceholder.bind(this))
+    this.router.delete('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.deletePlaceholder.bind(this))
 
     //
     // Playback Session Routes
