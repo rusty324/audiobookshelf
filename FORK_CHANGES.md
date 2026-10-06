@@ -11,8 +11,8 @@ This document records how this fork (`rusty324/audiobookshelf`) differs from ups
 - **Upstream commit at sync:** `5cb75a8` — Merge pull request #5558 from nichwall/weblate-credits-workflow
 - **Sync merge commit:** `441f6f5`
 - **Version:** 2.36.0
-- **Fork-only commits on `origin/master`:** 19
-- **Net divergence:** 67 files changed, 6145 insertions(+), 389 deletions(-)
+- **Fork-only commits on `origin/master`:** 21
+- **Net divergence:** 67 files changed, 6181 insertions(+), 389 deletions(-)
 
 <!-- SYNC-STATUS:END -->
 
@@ -113,6 +113,39 @@ Shaping rules, all in `server/utils/libraryExport.js` so they are free of databa
 - `client/pages/config/libraries.vue` — the button lives on the settings page rather than a library view, because the export spans all libraries. Uses the existing `$downloadFile` helper with a Blob URL that is revoked after handoff.
 - `test/server/utils/libraryExport.test.js` — 23 tests, including the three requested example entries verbatim. The multi-series and cover-path behavior was additionally checked end-to-end against a scratch database with real rows, so the ordering relies on the real Sequelize shape rather than a mock.
 
+### Series placeholders (branch `claude/series-placeholders` — **not yet merged**)
+
+Records books that belong to a series but are not in the library, so gaps show up on the series page. Built in four phases; the whole feature is still on a branch.
+
+Shown under the series listing as dimmed, dashed rows labelled "Not in library", with add / edit / remove, plus an optional Hardcover lookup that proposes the rest of a series, and an action that promotes an entry into a real library item.
+
+**The storage choice is what makes this safe.** Placeholders live in a new `seriesPlaceholders` table rather than as flagged `libraryItems`:
+
+- the scanner only walks `libraryItems`, so a placeholder can never be marked `isMissing`, and the admin "remove items with issues" sweep cannot delete the list. **Phases 1–3 needed no scanner changes at all.**
+- a new _table_ works on this fork where a new _column_ would not: `sequelize.sync({ alter: false })` creates missing tables but never adds columns, and migrations are version gated. Verified against a scratch database.
+
+**Resolution happens at read time, not on write.** The series page filters out placeholders whose sequence or title matches a book in the library, so an entry disappears on its own once the real book is scanned in — no stored state to go stale, nothing to clean up. The row is kept so the total can report how many gaps have been filled.
+
+Sequence handling is deliberate: sequences are free text in Audiobookshelf, so comparison normalizes numerically (`01` and `1` are the same slot, `1.5` sorts between 1 and 2) and sorting is done in JS, because SQL would order 10 before 2.
+
+- `server/models/SeriesPlaceholder.js`, `server/utils/seriesPlaceholders.js` — model and pure matching rules, unit tested against plain objects.
+- `GET/POST/PATCH/DELETE /api/series/:id/placeholders`, `POST .../bulk` — placeholders use **their own middleware**: the same series lookup and accessibility check as `SeriesController.middleware`, but mutations need only `canUpdate`, since curating a list of books you do not own is editing metadata rather than deleting library content.
+- `GET /api/series/:id/placeholder-suggestions` — Hardcover lookup, **read-only**; the data is third party and imperfect, so nothing is written until the user confirms. Bulk add skips conflicts rather than failing, including duplicates within a single batch.
+- `client/components/widgets/SeriesPlaceholders.vue`, rendered from `LazyBookshelf.vue`.
+
+**Hardcover is the only usable provider for this.** None of the nine providers already here can enumerate a series — Audible, Audnex, Google Books, Open Library, iTunes, FantLab and MusicBrainz all search by title/author/ASIN and return one book at a time, with its series position attached as a by-product. Goodreads stopped issuing API keys in 2020 and StoryGraph has no public API. Hardcover models series properly: `position` is a float so novellas at 1.5 stay distinct, `compilation` identifies box sets, and `is_completed` says whether the series is finished — which is what lets the UI distinguish "this is all of it" from "more may follow". The API token is **write-only**: stored in server settings, stripped from `toJSONForBrowser`, and replaced for the client by a `hardcoverEnabled` boolean.
+
+> ⚠️ **The Hardcover queries have never run against the live API.** `api.hardcover.app` is blocked by the egress proxy in the environment this was written in, so the GraphQL queries were written from the published `schema.graphql` and tested against a local stand-in. The transforms, error handling and wiring are covered; that the field names match the live schema is **not**. A failure surfaces as a toast plus a logged GraphQL error rather than a crash. **Run one lookup locally before relying on it.**
+
+**Phase 4 (promotion) is the part that gives up the safety above.** A file-less `libraryItem` is exactly what the scanner treats as broken, so it needs two explicit exclusions, both filtering on `isPlaceholderLibraryItem`:
+
+- `LibraryScanner` queries existing items by `libraryId` alone with no folder filter, so it would flag every promoted placeholder `isMissing` on each run.
+- `removeLibraryItemsWithIssues` then deletes anything flagged. That query selects a narrow attribute list, so **`extraData` had to be added to it** for the guard to see anything. A test asserts this dependency: if that column is ever dropped from the query, promoted placeholders become deletable again and the test fails rather than a library quietly losing data.
+
+`isMissing` and `isInvalid` stay **false** on a promoted item on purpose — it is not broken, it is empty, and conflating the two would put it in the issues count and give it the red error badge. The card gets its own grey placeholder marker instead. Promotion and demotion run in transactions and emit the same `item_added` / `item_removed` socket events the scanner uses; demotion refuses anything that is not a promoted placeholder, so it cannot be used to delete real media.
+
+**Known limitation:** deleting every real book in a series removes the series, and placeholders cascade with it.
+
 ### EPUB ↔ audiobook sync CLI (PRs #7, #8 — `77ca2e3`, `3b9711d`)
 
 Standalone Python 3.10+ tool at `tools/epub-audio-sync/` that force-aligns an EPUB to its audiobook and maps character offsets to audio timestamps (Whispersync-style). Entirely self-contained — shares nothing with the Node codebase and does not affect the server.
@@ -182,7 +215,7 @@ Applied after the v2.36.0 sync, which had raised runtime criticals from 1 to 3.
 
 ## 4. Pending and deferred
 
-No fork branches are currently unmerged — everything in sections 1–3 is on `master`.
+**One fork branch is unmerged:** `claude/series-placeholders` carries the whole series placeholders feature (all four phases, 497 mocha passing, lint and prettier clean). Everything else in sections 1–3 is on `master`. The React port of it **is** merged, so the React client currently has the UI for a feature this server does not serve unless that branch lands.
 
 ### Known deferred items
 
@@ -213,22 +246,40 @@ It can be tried without building from source: `ghcr.io/audiobookshelf/audiobooks
 
 ### React fork sync history
 
-Done through GitHub's **Sync fork → Update branch**, since outbound fetch to the upstream remote is blocked from the environment these changes were written in.
+Upstream is taken through GitHub's **Sync fork → Update branch**, since outbound fetch to the upstream remote is blocked from the environment these changes were written in. The 2026-10-06 entry was an exception — a reset rather than a merge.
 
-| Synced         | Fork tip   | Upstream tip            | Real content brought in                                                            | Overlap with ports                  |
-| -------------- | ---------- | ----------------------- | ---------------------------------------------------------------------------------- | ----------------------------------- |
-| **2026-09-17** | `44694f9f` | `925bf21f` (2026-09-17) | Modal back-button handling — 6 files, +826/−45                                     | None                                |
-| **2026-09-27** | `225875f3` | `e51a8291` (2026-09-25) | Button foreground colors + `useDetailsEdit` change detection — 69 files, +263/−187 | `BookDetailsEdit.tsx`, `en-us.json` |
+| Synced         | Fork tip   | Upstream tip            | Real content brought in                                                                                                           | Overlap with ports                                                                                                                            |
+| -------------- | ---------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| **2026-09-17** | `44694f9f` | `925bf21f` (2026-09-17) | Modal back-button handling — 6 files, +826/−45                                                                                    | None                                                                                                                                          |
+| **2026-09-27** | `225875f3` | `e51a8291` (2026-09-25) | Button foreground colors + `useDetailsEdit` change detection — 69 files, +263/−187                                                | `BookDetailsEdit.tsx`, `en-us.json`                                                                                                           |
+| **2026-10-06** | `8733f9c2` | `fdc9ca9f` (2026-10-05) | Player redesign (upstream PR #273) — 122 files, +4413/−1667. **Taken by resetting `master` to upstream, not merging** — see below | `SleepTimerModal.tsx`, `usePlayerHandler.ts`, `LibrariesClient.tsx`, `SettingsContent.tsx`, `Pill.tsx`, `LibraryItemClient.tsx`, `en-us.json` |
 
-After each sync the fork's divergence has stayed at exactly **19 files, +549/−10** — unchanged, which is the quickest confirmation that nothing was lost in a merge.
+After the first two syncs the fork's divergence stayed at exactly **19 files, +549/−10** — unchanged, which is the quickest confirmation that nothing was lost in a merge. That check does not apply to the third, which was a reset rather than a merge.
 
 > ℹ️ **Do not read the incoming commit count as a measure of a sync.** The 2026-09-17 sync reported **2355** incoming commits dating back to 2025-06, yet all of them arrived through a single upstream merge (PR #283, `codex/recover-pr-272`) whose second parent carried 2354 commits while contributing 6 files — a re-created branch with duplicated history, not a backlog. The 2026-09-27 sync's count of 40 was honest. **Judge a sync by `git diff --shortstat <prev-upstream-tip> <new-upstream-tip>`.**
+
+#### 2026-10-06: taken by resetting master, not merging
+
+The third sync was done differently: `master` was **reset to upstream** to take the player redesign, which discarded the fork's five merged features. A `Backup` branch was created first at the pre-reset master (`225875f3`), so nothing was lost, and the fork work was then **re-applied on top of the new upstream base** (React PR #5) rather than recovered.
+
+**How to tell a reset from a merge, after the fact:** `git merge-base --is-ancestor <old-master> <new-master>` answers no. On a sync merge it answers yes. If it answers no and there is no backup branch, the fork commits are unreferenced and only recoverable from the reflog of a clone that still has them.
+
+Re-applying was cheaper than the headline numbers suggest. Upstream's 105 commits touched 122 files, but only 9 overlapped the fork's 19, and the overlap churn totalled **+99/−57**. Three of five commits cherry-picked clean; the three conflicts were all import or ordering collisions in a single file each.
+
+Two findings from that re-apply are worth keeping, because **neither showed up as a conflict**:
+
+- **The three-way merge put code in the wrong function.** Upstream split `closePlayer` into a new _synchronous_ `stopPlaybackImmediately` plus `closePlayer`, and git dropped the listening-log flush block into `stopPlaybackImmediately` — which cannot `await` and deliberately does **not** end the session. The flush has to run in `closePlayer`, before `closeSession`, or buffered events are lost. Upstream's `savedTime` capture was also kept over the fork's: it reads the time **before** the player is destroyed, where the original `playerRef.current?.getCurrentTime()` would now return null.
+- **A clean merge hid a regression.** Upstream added `hasMobileHeaderContent` to `SettingsContent`, hiding the header row on mobile unless there is an entity count or add button. The fork's `secondaryButton` renders in that row and was not in the test, so a settings page passing only a secondary button would have had it invisible on mobile. Fixed in React PR #5; the libraries page also has an add button, so nothing was broken in practice.
+
+> ⚠️ **Upstream now requires Node >= 24** (`engines.node: ">=24.0.0"`). `pnpm install` refuses outright on Node 22 — a hard stop, not a warning. Installing in a restricted environment also needs `CYPRESS_INSTALL_BINARY=0`, since Cypress's postinstall cannot reach its binary download.
 
 #### What each sync was checked for
 
 A clean text merge is not evidence the ports still work, so each sync is also checked for changes that compile but break behavior.
 
 **2026-09-17 — no overlap.** Zero of the 19 ported files were touched. `Modal.tsx`'s change is internal with unchanged props, so `SleepTimerModal` is unaffected, and the slimmed `useUnsavedNavigationGuard` is consumed only by `BatchEditClient.tsx` and `LibrariesDropdown.tsx`.
+
+**2026-10-06 — not applicable.** A reset, not a merge; see the subsection above for what the re-apply found instead.
 
 **2026-09-27 — overlap, and one genuine near-miss.** `BookDetailsEdit.tsx` was edited on both sides; the merge kept upstream's `publishedYear`/`authors`/`sequence` normalization _and_ the `onItemMoved`/`orderable` wiring. `en-us.json` merged from both sides — valid JSON, no duplicate keys, fork keys intact.
 
@@ -246,16 +297,17 @@ PASS  series reorder (3, middle swap)
 
 ### Porting status
 
-| Fork feature                   | Status in the React fork                                                                                                            |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| **Series reorder buttons**     | ✅ **Ported** — React PR #1 (`469430d`)                                                                                             |
-| **Sleep timer auto-rewind**    | ✅ **Ported** — React PR #2 (`db3d201`)                                                                                             |
-| **Listening log**              | ✅ **Ported** — React PR #3 (`5dddbd3`), log UI **and** player event emission                                                       |
-| **JSON library export**        | ✅ **Ported** — React PR #4 (`4534650`)                                                                                             |
-| **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.         |
-| Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                               |
-| `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                            |
-| `client/strings/en-us.json`    | Keys re-added per feature; the React client has its own `src/locales/en-us.json` (types derive from it, so new keys are type-safe). |
+| Fork feature                   | Status in the React fork                                                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Series reorder buttons**     | ✅ **Ported** — React PR #1 (`469430d`)                                                                                                                  |
+| **Sleep timer auto-rewind**    | ✅ **Ported** — React PR #2 (`db3d201`)                                                                                                                  |
+| **Listening log**              | ✅ **Ported** — React PR #3 (`5dddbd3`), log UI **and** player event emission                                                                            |
+| **JSON library export**        | ✅ **Ported** — React PR #4 (`4534650`)                                                                                                                  |
+| **Series placeholders**        | ✅ **Ported** — React PR #6 (`8ccd4254`). Note the Vue half is **not yet merged**, so the React UI currently calls endpoints this server does not serve. |
+| **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.                              |
+| Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                                                    |
+| `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                                                 |
+| `client/strings/en-us.json`    | Keys re-added per feature; the React client has its own `src/locales/en-us.json` (types derive from it, so new keys are type-safe).                      |
 
 **Series reorder port** applied the same opt-in design as the Vue version — a `showMoveButtons`/`orderable` prop rather than always-on — so the shared components stay unchanged for authors, genres, tags and narrators:
 
