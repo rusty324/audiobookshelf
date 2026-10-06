@@ -33,6 +33,11 @@
       </div>
     </div>
 
+    <!-- Books in this series that are not in the library. Rendered inside the
+         bookshelf's own scroll container, after the shelves, so it does not
+         interfere with the virtualized grid above it. -->
+    <widgets-series-placeholders v-if="initialized && page === 'series-books'" :series-id="seriesId" />
+
     <widgets-cover-size-widget class="fixed right-4 z-50" :style="{ bottom: streamLibraryItem ? '181px' : '16px' }" />
   </div>
 </template>

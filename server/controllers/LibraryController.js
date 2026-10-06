@@ -10,6 +10,7 @@ const libraryItemFilters = require('../utils/queries/libraryItemFilters')
 const seriesFilters = require('../utils/queries/seriesFilters')
 const fileUtils = require('../utils/fileUtils')
 const libraryExport = require('../utils/libraryExport')
+const { isPlaceholderLibraryItem } = require('../utils/seriesPlaceholders')
 const { createNewSortInstance } = require('../libs/fastSort')
 const naturalSort = createNewSortInstance({
   comparer: new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' }).compare
@@ -715,7 +716,7 @@ class LibraryController {
       return res.sendStatus(403)
     }
 
-    const libraryItemsWithIssues = await Database.libraryItemModel.findAll({
+    const libraryItemsWithIssuesRaw = await Database.libraryItemModel.findAll({
       where: {
         libraryId: req.library.id,
         [Sequelize.Op.or]: [
@@ -727,7 +728,9 @@ class LibraryController {
           }
         ]
       },
-      attributes: ['id', 'mediaId', 'mediaType'],
+      // extraData is selected so promoted series placeholders can be told
+      // apart below; without it they would look like ordinary broken items
+      attributes: ['id', 'mediaId', 'mediaType', 'extraData'],
       include: [
         {
           model: Database.podcastModel,
@@ -753,6 +756,11 @@ class LibraryController {
         }
       ]
     })
+
+    // Promoted series placeholders have no files on purpose. The scanner
+    // already skips them so they should never be flagged, but this is the
+    // path that deletes things, so it double-checks rather than trusting that.
+    const libraryItemsWithIssues = libraryItemsWithIssuesRaw.filter((li) => !isPlaceholderLibraryItem(li))
 
     if (!libraryItemsWithIssues.length) {
       Logger.warn(`[LibraryController] No library items have issues`)

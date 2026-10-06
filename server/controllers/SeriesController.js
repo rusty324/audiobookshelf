@@ -6,6 +6,15 @@ const Database = require('../Database')
 const RssFeedManager = require('../managers/RssFeedManager')
 
 const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilters')
+const seriesPlaceholders = require('../utils/seriesPlaceholders')
+const hardcoverSeries = require('../utils/hardcoverSeries')
+const { getTitleIgnorePrefix } = require('../utils/index')
+const Hardcover = require('../providers/Hardcover')
+
+const hardcover = new Hardcover()
+
+/** Cap on how many placeholders one bulk request may add. */
+const MaxBulkPlaceholders = 300
 
 /**
  * @typedef RequestUserObject
@@ -18,6 +27,24 @@ const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilter
  *
  * @typedef {RequestWithUser & RequestEntityObject} SeriesControllerRequest
  */
+
+/**
+ * The books the requesting user can see in this series, reduced to the fields
+ * placeholder matching needs.
+ *
+ * Module scope rather than a class method on purpose: routes here are
+ * registered with `.bind(this)` where `this` is the ApiRouter, so `this` inside
+ * a controller method is not the controller and `this.helper()` would throw.
+ *
+ * @param {SeriesControllerRequest} req
+ * @returns {{ sequence: string, title: string }[]}
+ */
+function getBooksInSeriesForMatching(req) {
+  return (req.libraryItemsInSeries || []).map((libraryItem) => ({
+    sequence: libraryItem.series?.sequence || '',
+    title: libraryItem.media?.title || libraryItem.title || ''
+  }))
+}
 
 class SeriesController {
   constructor() {}
@@ -87,6 +114,360 @@ class SeriesController {
   }
 
   /**
+   * GET /api/series/:id/placeholders
+   *
+   * Placeholders for books in this series that are not in the library.
+   * Entries the library already covers are filtered out here rather than
+   * deleted, so a placeholder resolves itself once the real book is scanned
+   * in and nothing has to be cleaned up.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async getPlaceholders(req, res) {
+    const placeholders = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    const unfulfilled = seriesPlaceholders.filterUnfulfilled(
+      placeholders.map((p) => p.toJSONForClient()),
+      booksInSeries
+    )
+    res.json({
+      placeholders: unfulfilled,
+      // Total includes entries now covered by the library, so the client can
+      // say how many have been filled in rather than silently dropping them.
+      total: placeholders.length
+    })
+  }
+
+  /**
+   * POST /api/series/:id/placeholders
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async createPlaceholder(req, res) {
+    const input = seriesPlaceholders.sanitizePlaceholderInput(req.body)
+    if (!input) {
+      return res.status(400).send('Invalid placeholder')
+    }
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    if (seriesPlaceholders.conflictsWithLibrary(input, booksInSeries)) {
+      return res.status(409).send('A book matching this placeholder is already in the library')
+    }
+
+    const existing = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
+    if (seriesPlaceholders.isDuplicate(input, existing)) {
+      return res.status(409).send('A placeholder for this book already exists')
+    }
+
+    const placeholder = await Database.seriesPlaceholderModel.create({
+      seriesId: req.series.id,
+      title: input.title,
+      subtitle: input.subtitle,
+      sequence: input.sequence,
+      authorName: input.authorName,
+      source: input.source
+    })
+    Logger.info(`[SeriesController] Added placeholder "${input.title}" to series "${req.series.name}"`)
+    res.json(placeholder.toJSONForClient())
+  }
+
+  /**
+   * PATCH /api/series/:id/placeholders/:placeholderId
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async updatePlaceholder(req, res) {
+    const placeholder = await Database.seriesPlaceholderModel.findOne({
+      where: { id: req.params.placeholderId, seriesId: req.series.id }
+    })
+    if (!placeholder) return res.sendStatus(404)
+
+    const input = seriesPlaceholders.sanitizePlaceholderInput({
+      title: req.body.title ?? placeholder.title,
+      subtitle: req.body.subtitle ?? placeholder.subtitle,
+      sequence: req.body.sequence ?? placeholder.sequence,
+      authorName: req.body.authorName ?? placeholder.authorName,
+      source: placeholder.source
+    })
+    if (!input) {
+      return res.status(400).send('Invalid placeholder')
+    }
+
+    placeholder.set({
+      title: input.title,
+      subtitle: input.subtitle,
+      sequence: input.sequence,
+      authorName: input.authorName
+    })
+    if (placeholder.changed()) {
+      await placeholder.save()
+    }
+    res.json(placeholder.toJSONForClient())
+  }
+
+  /**
+   * GET /api/series/:id/placeholder-suggestions
+   *
+   * Ask Hardcover what is in this series and return the entries that are
+   * neither in the library nor already recorded. Read-only on purpose: the
+   * data is third-party and imperfect, so nothing is written until the user
+   * picks from it.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async getPlaceholderSuggestions(req, res) {
+    // A GET, so placeholderMiddleware does not gate it, but it spends a
+    // third-party API call and is only actionable by someone who can add
+    // placeholders - so require the same permission here.
+    if (!req.user.canUpdate) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted a placeholder lookup without permission`)
+      return res.sendStatus(403)
+    }
+
+    const token = Database.serverSettings.hardcoverApiKey
+    if (!token) {
+      return res.status(400).send('No Hardcover API token configured')
+    }
+
+    const result = await hardcover.getSeriesProposals(req.series.name, token)
+    if (!result) {
+      return res.status(502).send('Could not look up this series on Hardcover')
+    }
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    const existing = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
+    const suggestions = hardcoverSeries.filterNewProposals(result.proposals, booksInSeries, existing)
+
+    res.json({
+      suggestions,
+      matchedSeriesName: result.series.name,
+      // Lets the client say "that is the complete series" rather than implying
+      // it when the series is still being written
+      isCompleted: result.isCompleted,
+      totalInSeries: result.proposals.length
+    })
+  }
+
+  /**
+   * POST /api/series/:id/placeholders/bulk
+   *
+   * Add several placeholders at once, which is how a whole series gets filled
+   * in. Entries that conflict with the library or duplicate an existing
+   * placeholder are skipped rather than failing the request, so a partly
+   * redundant selection still does something useful.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async createPlaceholdersBulk(req, res) {
+    const submitted = req.body?.placeholders
+    if (!Array.isArray(submitted) || !submitted.length) {
+      return res.status(400).send('No placeholders provided')
+    }
+    if (submitted.length > MaxBulkPlaceholders) {
+      return res.status(400).send(`Too many placeholders, maximum is ${MaxBulkPlaceholders}`)
+    }
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    const existing = (await Database.seriesPlaceholderModel.getForSeries(req.series.id)).map((p) => ({ title: p.title, sequence: p.sequence }))
+
+    const toCreate = []
+    let skipped = 0
+    for (const entry of submitted) {
+      const input = seriesPlaceholders.sanitizePlaceholderInput(entry)
+      if (!input) {
+        skipped++
+        continue
+      }
+      // Compare against what is already accepted in this same batch too,
+      // otherwise a duplicated entry in one request would be written twice
+      if (seriesPlaceholders.conflictsWithLibrary(input, booksInSeries) || seriesPlaceholders.isDuplicate(input, existing)) {
+        skipped++
+        continue
+      }
+      existing.push({ title: input.title, sequence: input.sequence })
+      toCreate.push({
+        seriesId: req.series.id,
+        title: input.title,
+        subtitle: input.subtitle,
+        sequence: input.sequence,
+        authorName: input.authorName,
+        source: input.source
+      })
+    }
+
+    if (toCreate.length) {
+      await Database.seriesPlaceholderModel.bulkCreate(toCreate)
+      Logger.info(`[SeriesController] Added ${toCreate.length} placeholders to series "${req.series.name}"`)
+    }
+
+    res.json({ added: toCreate.length, skipped })
+  }
+
+  /**
+   * POST /api/series/:id/placeholders/:placeholderId/promote
+   *
+   * Turn a placeholder into a real library item with no files behind it, so
+   * it shows up everywhere books do - the library grid in series order,
+   * search, the author page - rather than only in the series panel.
+   *
+   * The item is marked in `extraData` so the scanner and the issue sweep skip
+   * it; see utils/seriesPlaceholders.isPlaceholderLibraryItem. Reversible via
+   * the demote route below.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async promotePlaceholder(req, res) {
+    const placeholder = await Database.seriesPlaceholderModel.findOne({
+      where: { id: req.params.placeholderId, seriesId: req.series.id }
+    })
+    if (!placeholder) return res.sendStatus(404)
+
+    const booksInSeries = getBooksInSeriesForMatching(req)
+    if (seriesPlaceholders.conflictsWithLibrary({ title: placeholder.title, sequence: placeholder.sequence }, booksInSeries)) {
+      return res.status(409).send('A book matching this placeholder is already in the library')
+    }
+
+    const transaction = await Database.sequelize.transaction()
+    try {
+      const book = await Database.bookModel.create(
+        {
+          title: placeholder.title,
+          titleIgnorePrefix: getTitleIgnorePrefix(placeholder.title),
+          subtitle: placeholder.subtitle,
+          narrators: [],
+          audioFiles: [],
+          chapters: [],
+          tags: [],
+          genres: []
+        },
+        { transaction }
+      )
+
+      const libraryItem = await Database.libraryItemModel.create(
+        {
+          libraryId: req.series.libraryId,
+          mediaId: book.id,
+          mediaType: 'book',
+          // No path, ino or libraryFiles: there is nothing on disk. isMissing
+          // stays false deliberately - this item is not broken, it is empty.
+          isFile: false,
+          isMissing: false,
+          isInvalid: false,
+          libraryFiles: [],
+          title: placeholder.title,
+          titleIgnorePrefix: getTitleIgnorePrefix(placeholder.title),
+          authorNamesFirstLast: placeholder.authorName || null,
+          authorNamesLastFirst: placeholder.authorName || null,
+          extraData: { [seriesPlaceholders.PlaceholderExtraDataKey]: true }
+        },
+        { transaction }
+      )
+
+      await Database.bookSeriesModel.create(
+        {
+          bookId: book.id,
+          seriesId: req.series.id,
+          sequence: placeholder.sequence || null
+        },
+        { transaction }
+      )
+
+      await placeholder.destroy({ transaction })
+      await transaction.commit()
+
+      Logger.info(`[SeriesController] Promoted placeholder "${placeholder.title}" to a library item in series "${req.series.name}"`)
+
+      // Same event the scanner emits for a new item, so open bookshelves pick
+      // it up without a reload
+      const expanded = await Database.libraryItemModel.getExpandedById(libraryItem.id)
+      if (expanded) SocketAuthority.libraryItemEmitter('item_added', expanded)
+
+      res.json({ libraryItemId: libraryItem.id })
+    } catch (error) {
+      await transaction.rollback()
+      Logger.error(`[SeriesController] Failed to promote placeholder: ${error.message}`)
+      res.status(500).send('Failed to promote placeholder')
+    }
+  }
+
+  /**
+   * DELETE /api/series/:id/promoted/:libraryItemId
+   *
+   * Turn a promoted placeholder back into a plain placeholder entry. Refuses
+   * anything that is not a promoted placeholder, so this can never be used to
+   * delete real media.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async demotePlaceholder(req, res) {
+    const libraryItem = await Database.libraryItemModel.findByPk(req.params.libraryItemId, {
+      include: {
+        model: Database.bookModel,
+        include: { model: Database.bookSeriesModel }
+      }
+    })
+    if (!libraryItem) return res.sendStatus(404)
+
+    if (!seriesPlaceholders.isPlaceholderLibraryItem(libraryItem)) {
+      Logger.warn(`[SeriesController] Refusing to demote library item "${libraryItem.id}" - it is not a promoted placeholder`)
+      return res.status(400).send('That library item is not a placeholder')
+    }
+
+    const bookSeries = libraryItem.media?.bookSeries?.find((bs) => bs.seriesId === req.series.id)
+    if (!bookSeries) {
+      return res.status(400).send('That library item is not in this series')
+    }
+
+    const transaction = await Database.sequelize.transaction()
+    try {
+      await Database.seriesPlaceholderModel.create(
+        {
+          seriesId: req.series.id,
+          title: libraryItem.media.title,
+          subtitle: libraryItem.media.subtitle,
+          sequence: bookSeries.sequence || '',
+          authorName: libraryItem.authorNamesFirstLast || null,
+          source: 'manual'
+        },
+        { transaction }
+      )
+      // Destroying the library item cascades to the book and its bookSeries row
+      await libraryItem.destroy({ transaction })
+      await Database.bookModel.destroy({ where: { id: libraryItem.mediaId }, transaction })
+      await transaction.commit()
+
+      Logger.info(`[SeriesController] Demoted "${libraryItem.title}" back to a placeholder`)
+      SocketAuthority.libraryItemEmitter('item_removed', libraryItem)
+      res.sendStatus(200)
+    } catch (error) {
+      await transaction.rollback()
+      Logger.error(`[SeriesController] Failed to demote placeholder: ${error.message}`)
+      res.status(500).send('Failed to demote placeholder')
+    }
+  }
+
+  /**
+   * DELETE /api/series/:id/placeholders/:placeholderId
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async deletePlaceholder(req, res) {
+    const rowsDeleted = await Database.seriesPlaceholderModel.destroy({
+      where: { id: req.params.placeholderId, seriesId: req.series.id }
+    })
+    if (!rowsDeleted) return res.sendStatus(404)
+    res.sendStatus(200)
+  }
+
+  /**
    *
    * @param {RequestWithUser} req
    * @param {Response} res
@@ -110,6 +491,38 @@ class SeriesController {
       return res.sendStatus(403)
     } else if ((req.method == 'PATCH' || req.method == 'POST') && !req.user.canUpdate) {
       Logger.warn(`[SeriesController] User "${req.user.username}" attempted to update without permission`)
+      return res.sendStatus(403)
+    }
+
+    req.series = series
+    req.libraryItemsInSeries = libraryItems
+    next()
+  }
+
+  /**
+   * Access control for the placeholder routes.
+   *
+   * Same series lookup and accessibility check as `middleware`, but every
+   * mutation needs only `canUpdate`. Managing a list of books you do not own
+   * is editing library metadata, not deleting library content, so it should
+   * not require the stronger `canDelete` that `middleware` applies to DELETE.
+   *
+   * @param {RequestWithUser} req
+   * @param {Response} res
+   * @param {NextFunction} next
+   */
+  async placeholderMiddleware(req, res, next) {
+    const series = await Database.seriesModel.findByPk(req.params.id)
+    if (!series) return res.sendStatus(404)
+
+    const libraryItems = await libraryItemsBookFilters.getLibraryItemsForSeries(series, req.user)
+    if (!libraryItems.length) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to access series "${series.id}" with no accessible books`)
+      return res.sendStatus(404)
+    }
+
+    if (req.method !== 'GET' && !req.user.canUpdate) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to modify series placeholders without permission`)
       return res.sendStatus(403)
     }
 
