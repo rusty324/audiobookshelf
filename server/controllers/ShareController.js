@@ -146,7 +146,7 @@ class ShareController {
 
     const mediaItemShare = ShareManager.findBySlug(slug)
     if (!mediaItemShare) {
-      return res.status(404)
+      return res.sendStatus(404)
     }
 
     const playbackSession = ShareManager.findPlaybackSessionBySessionId(req.cookies.share_session_id)
@@ -186,7 +186,7 @@ class ShareController {
 
     const mediaItemShare = ShareManager.findBySlug(slug)
     if (!mediaItemShare) {
-      return res.status(404)
+      return res.sendStatus(404)
     }
 
     const playbackSession = ShareManager.findPlaybackSessionBySessionId(req.cookies.share_session_id)
@@ -235,7 +235,7 @@ class ShareController {
     const { slug } = req.params
     const mediaItemShare = ShareManager.findBySlug(slug)
     if (!mediaItemShare) {
-      return res.status(404)
+      return res.sendStatus(404)
     }
     if (!mediaItemShare.isDownloadable) {
       return res.status(403).send('Download is not allowed for this item')
@@ -299,7 +299,7 @@ class ShareController {
 
     const mediaItemShare = ShareManager.findBySlug(slug)
     if (!mediaItemShare) {
-      return res.status(404)
+      return res.sendStatus(404)
     }
 
     const playbackSession = ShareManager.findPlaybackSessionBySessionId(req.cookies.share_session_id)
