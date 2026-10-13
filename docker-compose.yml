@@ -1,12 +1,24 @@
 ### EXAMPLE DOCKER COMPOSE ###
 services:
   audiobookshelf:
-    # Build the image from this repository's Dockerfile (this fork's code)
-    # instead of pulling the prebuilt upstream image. Run `docker compose up
-    # --build` (or `docker compose build`) to (re)build after code changes.
+    # Builds this fork's server together with this fork's React client, using
+    # the React repo's own Dockerfile. The React side is fetched from GitHub at
+    # build time, so only this repository needs to be on disk. Each rebuild
+    # picks up whatever is on the React fork's master branch.
+    #
+    #   docker compose up -d --build
+    #
+    # Needs Docker Compose 2.17+ (for additional_contexts) and network access
+    # to GitHub during the build. To run the frozen Vue client instead, use
+    # docker-compose.vue.yml.
     build:
-      context: .
-    image: audiobookshelf:local
+      context: https://github.com/rusty324/audiobookshelf-client-react.git#master
+      dockerfile: Dockerfile
+      additional_contexts:
+        # Names the Dockerfile expects: the React client, and this server
+        abs-client: https://github.com/rusty324/audiobookshelf-client-react.git#master
+        abs-server: .
+    image: audiobookshelf-react:local
     # ABS runs on port 13378 by default. If you want to change
     # the port, only change the external port, not the internal port
     ports:
