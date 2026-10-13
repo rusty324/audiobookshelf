@@ -848,8 +848,18 @@ class LibraryItem extends Model {
   get isPodcast() {
     return this.mediaType === 'podcast'
   }
+  /**
+   * Check if book or podcast library item has audio tracks.
+   * Requires expanded library item (media loaded).
+   *
+   * @returns {boolean}
+   */
   get hasAudioTracks() {
-    return this.media.hasAudioTracks()
+    if (!this.media) {
+      Logger.error(`[LibraryItem] hasAudioTracks: Library item "${this.id}" does not have media`)
+      return false
+    }
+    return this.media.hasAudioTracks
   }
 
   /**
@@ -897,24 +907,6 @@ class LibraryItem extends Model {
           [this.sequelize.models.series, 'bookSeries', 'createdAt', 'ASC']
         ]
       })
-    }
-  }
-
-  /**
-   * Check if book or podcast library item has audio tracks
-   * Requires expanded library item
-   *
-   * @returns {boolean}
-   */
-  hasAudioTracks() {
-    if (!this.media) {
-      Logger.error(`[LibraryItem] hasAudioTracks: Library item "${this.id}" does not have media`)
-      return false
-    }
-    if (this.isBook) {
-      return this.media.audioFiles?.length > 0
-    } else {
-      return this.media.podcastEpisodes?.length > 0
     }
   }
 
