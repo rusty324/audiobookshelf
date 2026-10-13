@@ -29,6 +29,22 @@ The script works entirely from local history — no network access to upstream i
 
 ---
 
+## Client policy: React only (from 2026-10-13)
+
+**The Vue client (`client/`) is frozen.** New fork features are built for the server (this repo) and the React client (`rusty324/audiobookshelf-client-react`) only. Upstream is moving to React and no longer reviews or merges Vue frontend changes, so parity work on a second UI is no longer worth its cost.
+
+What this does and does not mean:
+
+- **This repository is not deprecated.** It is also the server, and the React client is only a frontend that talks to it. Every fork feature with server logic lives here, so server changes keep landing here.
+- **Existing Vue-side fork features stay.** Series reorder, auto-rewind, the listening log, JSON export, organize into folders and series placeholders all keep working in the Vue client. They are no longer maintained there: if an upstream sync breaks one, it is fixed only if the fix is trivial.
+- **Upstream syncs still bring in Vue client changes.** Nothing is deleted from `client/`, so the Vue UI remains available as a fallback.
+
+> ⚠️ **The deployed instance still serves the Vue UI.** The server serves exactly one client: the Vue build by default, or the React client when `REACT_CLIENT_PATH` is set. `docker-compose.yml` builds the Vue client and does not set it, so React-only features are **not visible** until the deployment switches. The React repo's own `Dockerfile` builds a combined server + React image, but it compiles the server with a `build:server` step and `tsconfig.server.json` that this fork's server (last synced at 2.36.0) does not have, so it does not build against this fork as is.
+
+Dependabot keeps watching `client/` while the Vue UI is the one deployed, since its dependency security updates still apply to what is running.
+
+---
+
 ## 1. Features added
 
 ### Organize into folders (PR #2 — `8ce25b7`)
