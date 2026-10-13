@@ -10,8 +10,8 @@
     "build": "nuxt build",
     "start": "nuxt start",
     "generate": "nuxt generate",
-    "lint": "eslint --ext .js,.vue components pages layouts plugins store mixins",
-    "lint:fix": "eslint --ext .js,.vue components pages layouts plugins store mixins --fix",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .js,.vue components pages layouts plugins store mixins",
+    "lint:fix": "ESLINT_USE_FLAT_CONFIG=false eslint --ext .js,.vue components pages layouts plugins store mixins --fix",
     "test": "npm run compile-tailwind && cypress run --component --browser chrome",
     "test-visually": "npm run compile-tailwind && cypress open --component --browser chrome",
     "compile-tailwind": "npx @tailwindcss/cli -i ./assets/tailwind.css -o ./cypress/support/tailwind.compiled.css"
