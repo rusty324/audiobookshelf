@@ -152,6 +152,11 @@ class Database {
     return this.models.seriesPlaceholder
   }
 
+  /** @type {typeof import('./models/AnthologyStory')} */
+  get anthologyStoryModel() {
+    return this.models.anthologyStory
+  }
+
   /** @type {typeof import('./models/CustomMetadataProvider')} */
   get customMetadataProviderModel() {
     return this.models.customMetadataProvider
@@ -338,6 +343,7 @@ class Database {
     require('./models/Series').init(this.sequelize)
     require('./models/BookSeries').init(this.sequelize)
     require('./models/SeriesPlaceholder').init(this.sequelize)
+    require('./models/AnthologyStory').init(this.sequelize)
     require('./models/Author').init(this.sequelize)
     require('./models/BookAuthor').init(this.sequelize)
     require('./models/Collection').init(this.sequelize)

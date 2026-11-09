@@ -10,6 +10,7 @@ const Database = require('../Database')
 const zipHelpers = require('../utils/zipHelpers')
 const { reqSupportsWebp, clampPositiveInt } = require('../utils/index')
 const { ScanResult, AudioMimeType } = require('../utils/constants')
+const anthologyStories = require('../utils/anthologyStories')
 const { getAudioMimeTypeFromExtname, encodeUriPath, filePathToPOSIX, isSameOrSubPath, sanitizeFilename, buildBookOrganizeRelParts } = require('../utils/fileUtils')
 const Watcher = require('../Watcher')
 const LibraryItemScanner = require('../scanner/LibraryItemScanner')
@@ -1352,6 +1353,97 @@ class LibraryItemController {
    * @param {Response} res
    * @param {NextFunction} next
    */
+  /**
+   * GET /api/items/:id/stories
+   *
+   * The anthology stories in a book, in playback order. An empty list means
+   * the book is not an anthology.
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async getStories(req, res) {
+    if (!req.libraryItem.isBook) {
+      return res.status(400).send('Only books can have anthology stories')
+    }
+    const stories = await Database.anthologyStoryModel.getForBook(req.libraryItem.media.id)
+    res.json({ stories: stories.map((s) => s.toJSONForClient()) })
+  }
+
+  /**
+   * PATCH /api/items/:id/stories
+   *
+   * Replace a book's anthology stories with the submitted list. The list is
+   * saved whole because its rules span stories (no two may overlap), and the
+   * editor works on the whole list anyway. An empty list stops the book being
+   * an anthology.
+   *
+   * PATCH rather than PUT on purpose: LibraryItemController.middleware checks
+   * canUpdate only for PATCH and POST.
+   *
+   * @param {LibraryItemControllerRequest} req
+   * @param {Response} res
+   */
+  async updateStories(req, res) {
+    if (!req.user.canUpdate) {
+      return res.sendStatus(403)
+    }
+    if (!req.libraryItem.isBook) {
+      return res.status(400).send('Only books can have anthology stories')
+    }
+
+    const result = anthologyStories.sanitizeStories(req.body?.stories, { duration: req.libraryItem.media.duration })
+    if (result.error) {
+      return res.status(400).send(result.error)
+    }
+
+    const libraryId = req.libraryItem.libraryId
+    const bookId = req.libraryItem.media.id
+
+    // Resolve series by name first, the same way the book editor does, so a
+    // story can name any series, new ones included. Done outside the write
+    // transaction because Series.findOrCreateByNameAndLibrary takes none.
+    const seriesIdByName = new Map()
+    for (const story of result.stories) {
+      if (!story.seriesName) continue
+      const key = story.seriesName.toLowerCase()
+      if (seriesIdByName.has(key)) continue
+      let series = await Database.seriesModel.getByNameAndLibrary(story.seriesName, libraryId)
+      if (!series) {
+        series = await Database.seriesModel.findOrCreateByNameAndLibrary(story.seriesName, libraryId)
+        Database.addSeriesToFilterData(libraryId, series.name, series.id)
+      }
+      seriesIdByName.set(key, series.id)
+    }
+
+    const transaction = await Database.sequelize.transaction()
+    try {
+      await Database.anthologyStoryModel.destroy({ where: { bookId }, transaction })
+      if (result.stories.length) {
+        await Database.anthologyStoryModel.bulkCreate(
+          result.stories.map((story) => ({
+            bookId,
+            seriesId: story.seriesName ? seriesIdByName.get(story.seriesName.toLowerCase()) : null,
+            title: story.title,
+            startTime: story.startTime,
+            endTime: story.endTime,
+            sequence: story.sequence
+          })),
+          { transaction }
+        )
+      }
+      await transaction.commit()
+    } catch (error) {
+      await transaction.rollback()
+      Logger.error(`[LibraryItemController] Failed to save anthology stories for "${req.libraryItem.media.title}": ${error.message}`)
+      return res.status(500).send('Failed to save anthology stories')
+    }
+
+    Logger.info(`[LibraryItemController] Saved ${result.stories.length} anthology stories for "${req.libraryItem.media.title}"`)
+    const stories = await Database.anthologyStoryModel.getForBook(bookId)
+    res.json({ stories: stories.map((s) => s.toJSONForClient()) })
+  }
+
   async middleware(req, res, next) {
     req.libraryItem = await Database.libraryItemModel.getExpandedById(req.params.id)
     if (!req.libraryItem?.media) return res.sendStatus(404)

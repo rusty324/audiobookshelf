@@ -109,6 +109,8 @@ class ApiRouter {
 
     this.router.get('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.findOne.bind(this))
     this.router.delete('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.delete.bind(this))
+    this.router.get('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.getStories.bind(this))
+    this.router.patch('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.updateStories.bind(this))
     this.router.get('/items/:id/download', LibraryItemController.middleware.bind(this), LibraryItemController.download.bind(this))
     this.router.patch('/items/:id/media', LibraryItemController.middleware.bind(this), LibraryItemController.updateMedia.bind(this))
     this.router.get('/items/:id/cover', LibraryItemController.getCover.bind(this))
@@ -240,6 +242,7 @@ class ApiRouter {
     // no POST on ':placeholderId' today so nothing currently shadows it, but
     // adding one later would, and this ordering makes that harmless.
     this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholdersBulk.bind(this))
+    this.router.get('/series/:id/reading-order', SeriesController.placeholderMiddleware.bind(this), SeriesController.getReadingOrder.bind(this))
     this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholderSuggestions.bind(this))
     this.router.post('/series/:id/placeholders/:placeholderId/promote', SeriesController.placeholderMiddleware.bind(this), SeriesController.promotePlaceholder.bind(this))
     this.router.delete('/series/:id/promoted/:libraryItemId', SeriesController.placeholderMiddleware.bind(this), SeriesController.demotePlaceholder.bind(this))
