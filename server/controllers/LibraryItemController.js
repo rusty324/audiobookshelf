@@ -1416,6 +1416,10 @@ class LibraryItemController {
       seriesIdByName.set(key, series.id)
     }
 
+    // Series the old stories used, so any left holding nothing can be removed
+    const previousStories = await Database.anthologyStoryModel.findAll({ where: { bookId }, attributes: ['seriesId'] })
+    const previousSeriesIds = [...new Set(previousStories.map((s) => s.seriesId).filter(Boolean))]
+
     const transaction = await Database.sequelize.transaction()
     try {
       await Database.anthologyStoryModel.destroy({ where: { bookId }, transaction })
@@ -1440,6 +1444,10 @@ class LibraryItemController {
     }
 
     Logger.info(`[LibraryItemController] Saved ${result.stories.length} anthology stories for "${req.libraryItem.media.title}"`)
+
+    const keptSeriesIds = new Set(seriesIdByName.values())
+    await this.checkRemoveEmptySeries(previousSeriesIds.filter((id) => !keptSeriesIds.has(id)))
+
     const stories = await Database.anthologyStoryModel.getForBook(bookId)
     res.json({ stories: stories.map((s) => s.toJSONForClient()) })
   }

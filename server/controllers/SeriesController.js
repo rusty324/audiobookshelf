@@ -592,6 +592,9 @@ class SeriesController {
    * is editing library metadata, not deleting library content, so it should
    * not require the stronger `canDelete` that `middleware` applies to DELETE.
    *
+   * A series whose only entries are anthology stories the user can see is
+   * accessible too, so its reading order can be shown.
+   *
    * @param {RequestWithUser} req
    * @param {Response} res
    * @param {NextFunction} next
@@ -601,8 +604,9 @@ class SeriesController {
     if (!series) return res.sendStatus(404)
 
     const libraryItems = await libraryItemsBookFilters.getLibraryItemsForSeries(series, req.user)
-    if (!libraryItems.length) {
-      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to access series "${series.id}" with no accessible books`)
+    req.series = series
+    if (!libraryItems.length && !(await getAccessibleStoriesForSeries(req)).length) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to access series "${series.id}" with no accessible books or stories`)
       return res.sendStatus(404)
     }
 
@@ -611,7 +615,6 @@ class SeriesController {
       return res.sendStatus(403)
     }
 
-    req.series = series
     req.libraryItemsInSeries = libraryItems
     next()
   }

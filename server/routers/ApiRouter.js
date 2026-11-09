@@ -431,6 +431,9 @@ class ApiRouter {
   /**
    * After deleting book(s), remove empty series
    *
+   * A series that holds anthology stories is not empty, even with no books:
+   * removing it would strip those stories of their series positions.
+   *
    * @param {string[]} seriesIds
    */
   async checkRemoveEmptySeries(seriesIds) {
@@ -444,7 +447,8 @@ class ApiRouter {
             {
               id: seriesIds
             },
-            sequelize.where(sequelize.literal('(SELECT count(*) FROM bookSeries bs WHERE bs.seriesId = series.id)'), 0)
+            sequelize.where(sequelize.literal('(SELECT count(*) FROM bookSeries bs WHERE bs.seriesId = series.id)'), 0),
+            sequelize.where(sequelize.literal('(SELECT count(*) FROM anthologyStories s WHERE s.seriesId = series.id)'), 0)
           ],
           attributes: ['id', 'name', 'libraryId'],
           include: {

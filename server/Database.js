@@ -779,7 +779,8 @@ class Database {
       await collectionBook.destroy()
     }
 
-    // Remove empty series
+    // Remove empty series. A series holding anthology stories is not empty,
+    // even with no books: removing it would strip the stories of their positions.
     const emptySeries = await this.seriesModel.findAll({
       include: {
         model: this.bookSeriesModel,
@@ -787,7 +788,9 @@ class Database {
       },
       where: { '$bookSeries.id$': null }
     })
-    for (const series of emptySeries) {
+    const storiesInEmptySeries = emptySeries.length ? await this.anthologyStoryModel.findAll({ where: { seriesId: emptySeries.map((s) => s.id) }, attributes: ['seriesId'] }) : []
+    const seriesIdsWithStories = new Set(storiesInEmptySeries.map((s) => s.seriesId))
+    for (const series of emptySeries.filter((s) => !seriesIdsWithStories.has(s.id))) {
       Logger.warn(`Found series "${series.name}" with no books - removing it`)
       await series.destroy()
     }
