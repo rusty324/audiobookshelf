@@ -162,6 +162,23 @@ Sequence handling is deliberate: sequences are free text in Audiobookshelf, so c
 
 **Known limitation:** deleting every real book in a series removes the series, and placeholders cascade with it.
 
+### Anthology stories (branch `claude/anthology-stories`, not yet merged)
+
+Lets a book that collects several stories place each story at its own position in a series, e.g. _Tales From The Folly_ with one story at Rivers of London **2.5** and another at **4.5**. React client only, per the client policy above.
+
+**Why a separate table.** A book's series entry (`bookSeries`) is matched by series name and holds one sequence per series (`Book.updateSeriesFromRequest`), so a book cannot sit at both 2.5 and 4.5 in one series through the normal series field. Stories live in a new `anthologyStories` table instead, each a **time range** of the book with a title, an optional series and a sequence. Time ranges rather than chapter ids, so stories survive chapter edits; the editor picks chapters and maps them to times. As with placeholders, a new table works here where a new column would not. A book is an anthology exactly when it has stories, so there is no separate flag to keep in step.
+
+- `server/models/AnthologyStory.js`, `server/utils/anthologyStories.js` — model, plus pure validation (titles required, `start < end`, within the book's duration, no overlaps, a sequence needs a series) and reading-order merge, unit tested. Deleting a book cascades to its stories; deleting a series keeps the story without a position.
+- `GET/PATCH /api/items/:id/stories` — PATCH replaces the list (an empty list stops the book being an anthology). Series are resolved by name like the book editor does, and created when new.
+- `GET /api/series/:id/reading-order` — books, stories and unfulfilled placeholders merged by sequence. Stories are filtered by **their own book's** access rules (library, explicit, tags), because an anthology is often not itself in the series its stories are placed in.
+- **Interplay with placeholders:** a story at a sequence fills that slot, so a "2.5" placeholder resolves once a story is placed there, and a new placeholder at a story's slot is refused.
+- **Empty-series cleanup now counts stories.** Startup cleanup (`Database.cleanDatabase`) and `checkRemoveEmptySeries` delete any series with no books; both now keep a series that holds stories, or a story-only series would be deleted and its stories would lose their positions. Saving stories removes a series the old stories used if nothing references it any more.
+- React: a **Stories** section in the edit modal beside Chapters ("This book is an anthology", then a row per story with first/last chapter, series and sequence); a **Stories** table on the item page with play-from-here; a **Reading order** list on the series page, shown only when the series has stories.
+
+Verified with unit tests, an HTTP-level harness against a scratch database, and a Playwright run of the real UI against a server with generated audiobooks (6-chapter anthology, books 1/2/3/5, a #4 placeholder): the reading order came out `1, 2, 2.5 (story), 3, 4 (placeholder), 4.5 (story), 5`.
+
+**Known limitations:** stories are ranges of audio chapters, so an ebook-only anthology cannot be split; "continue series" on the home page does not know about stories; a series that holds only stories does not appear in the library's series list (its page is reachable from the story's link).
+
 ### EPUB ↔ audiobook sync CLI (PRs #7, #8 — `77ca2e3`, `3b9711d`)
 
 Standalone Python 3.10+ tool at `tools/epub-audio-sync/` that force-aligns an EPUB to its audiobook and maps character offsets to audio timestamps (Whispersync-style). Entirely self-contained — shares nothing with the Node codebase and does not affect the server.
@@ -332,6 +349,7 @@ PASS  series reorder (3, middle swap)
 | **Listening log**              | ✅ **Ported** — React PR #3 (`5dddbd3`), log UI **and** player event emission                                                       |
 | **JSON library export**        | ✅ **Ported** — React PR #4 (`4534650`)                                                                                             |
 | **Series placeholders**        | ✅ **Ported** — React PR #6 (`8ccd4254`)                                                                                            |
+| **Anthology stories**          | 🚧 **Built React-first** — branch `claude/anthology-stories` (not yet merged); no Vue UI, per the client policy                     |
 | **Organize into folders** (UI) | ⚠️ Not ported. Depends on this fork's server-only `POST /api/items/:id/organize`, so it is useful only against this server.         |
 | Four one-line Vue bug fixes    | No action needed — they fix Vue code the rewrite does not carry over.                                                               |
 | `client/.eslintrc.js`          | Obsolete; the React repo has its own `eslint.config.js`.                                                                            |
