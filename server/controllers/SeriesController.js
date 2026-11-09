@@ -7,6 +7,7 @@ const RssFeedManager = require('../managers/RssFeedManager')
 
 const libraryItemsBookFilters = require('../utils/queries/libraryItemsBookFilters')
 const seriesPlaceholders = require('../utils/seriesPlaceholders')
+const anthologyStories = require('../utils/anthologyStories')
 const hardcoverSeries = require('../utils/hardcoverSeries')
 const { getTitleIgnorePrefix } = require('../utils/index')
 const Hardcover = require('../providers/Hardcover')
@@ -44,6 +45,58 @@ function getBooksInSeriesForMatching(req) {
     sequence: libraryItem.series?.sequence || '',
     title: libraryItem.media?.title || libraryItem.title || ''
   }))
+}
+
+/**
+ * Anthology stories placed in this series that the requesting user can see.
+ *
+ * A story is visible exactly when its book is: the same library, explicit
+ * and tag rules as User.checkCanAccessLibraryItem, applied to the book that
+ * holds the story. The series' own book list (libraryItemsInSeries) cannot be
+ * used for this, because an anthology is often not itself in the series its
+ * stories are placed in.
+ *
+ * @param {SeriesControllerRequest} req
+ * @returns {Promise<{ id: string, title: string, sequence: string, startTime: number, endTime: number, libraryItemId: string, bookTitle: string }[]>}
+ */
+async function getAccessibleStoriesForSeries(req) {
+  const stories = await Database.anthologyStoryModel.findAll({
+    where: { seriesId: req.series.id },
+    include: {
+      model: Database.bookModel,
+      attributes: ['id', 'title', 'explicit', 'tags'],
+      include: { model: Database.libraryItemModel, attributes: ['id', 'libraryId'] }
+    }
+  })
+  return stories
+    .filter((story) => {
+      const libraryItem = story.book?.libraryItem
+      if (!libraryItem) return false
+      // checkCanAccessLibraryItem reads libraryId plus media.explicit and media.tags
+      return req.user.checkCanAccessLibraryItem({ libraryId: libraryItem.libraryId, media: story.book })
+    })
+    .map((story) => ({
+      id: story.id,
+      title: story.title,
+      sequence: story.sequence || '',
+      startTime: story.startTime,
+      endTime: story.endTime,
+      libraryItemId: story.book.libraryItem.id,
+      bookTitle: story.book.title
+    }))
+}
+
+/**
+ * Everything the library already covers in this series: its books, plus
+ * anthology stories placed in it. Placeholder matching uses this so that a
+ * story at 2.5 counts as owning slot 2.5.
+ *
+ * @param {SeriesControllerRequest} req
+ * @returns {Promise<{ sequence: string, title: string }[]>}
+ */
+async function getCoveredEntriesForSeries(req) {
+  const stories = await getAccessibleStoriesForSeries(req)
+  return [...getBooksInSeriesForMatching(req), ...anthologyStories.storiesAsCoveredEntries(stories)]
 }
 
 class SeriesController {
@@ -126,7 +179,7 @@ class SeriesController {
    */
   async getPlaceholders(req, res) {
     const placeholders = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
-    const booksInSeries = getBooksInSeriesForMatching(req)
+    const booksInSeries = await getCoveredEntriesForSeries(req)
     const unfulfilled = seriesPlaceholders.filterUnfulfilled(
       placeholders.map((p) => p.toJSONForClient()),
       booksInSeries
@@ -151,7 +204,7 @@ class SeriesController {
       return res.status(400).send('Invalid placeholder')
     }
 
-    const booksInSeries = getBooksInSeriesForMatching(req)
+    const booksInSeries = await getCoveredEntriesForSeries(req)
     if (seriesPlaceholders.conflictsWithLibrary(input, booksInSeries)) {
       return res.status(409).send('A book matching this placeholder is already in the library')
     }
@@ -238,7 +291,7 @@ class SeriesController {
       return res.status(502).send('Could not look up this series on Hardcover')
     }
 
-    const booksInSeries = getBooksInSeriesForMatching(req)
+    const booksInSeries = await getCoveredEntriesForSeries(req)
     const existing = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
     const suggestions = hardcoverSeries.filterNewProposals(result.proposals, booksInSeries, existing)
 
@@ -272,7 +325,7 @@ class SeriesController {
       return res.status(400).send(`Too many placeholders, maximum is ${MaxBulkPlaceholders}`)
     }
 
-    const booksInSeries = getBooksInSeriesForMatching(req)
+    const booksInSeries = await getCoveredEntriesForSeries(req)
     const existing = (await Database.seriesPlaceholderModel.getForSeries(req.series.id)).map((p) => ({ title: p.title, sequence: p.sequence }))
 
     const toCreate = []
@@ -328,7 +381,7 @@ class SeriesController {
     })
     if (!placeholder) return res.sendStatus(404)
 
-    const booksInSeries = getBooksInSeriesForMatching(req)
+    const booksInSeries = await getCoveredEntriesForSeries(req)
     if (seriesPlaceholders.conflictsWithLibrary({ title: placeholder.title, sequence: placeholder.sequence }, booksInSeries)) {
       return res.status(409).send('A book matching this placeholder is already in the library')
     }
@@ -454,6 +507,38 @@ class SeriesController {
   }
 
   /**
+   * GET /api/series/:id/reading-order
+   *
+   * The series in reading order: its books, anthology stories placed in it,
+   * and the missing-book placeholders not yet covered by either, merged and
+   * sorted by sequence. This is the one view where an anthology's stories
+   * appear at their own positions (2.5, 4.5) rather than at the book's.
+   *
+   * @param {SeriesControllerRequest} req
+   * @param {Response} res
+   */
+  async getReadingOrder(req, res) {
+    const books = (req.libraryItemsInSeries || []).map((libraryItem) => ({
+      libraryItemId: libraryItem.id,
+      title: libraryItem.media?.title || libraryItem.title || '',
+      sequence: libraryItem.series?.sequence || ''
+    }))
+    const stories = await getAccessibleStoriesForSeries(req)
+
+    const covered = [...getBooksInSeriesForMatching(req), ...anthologyStories.storiesAsCoveredEntries(stories)]
+    const placeholderRows = await Database.seriesPlaceholderModel.getForSeries(req.series.id)
+    const placeholders = seriesPlaceholders.filterUnfulfilled(
+      placeholderRows.map((p) => p.toJSONForClient()),
+      covered
+    )
+
+    res.json({
+      entries: anthologyStories.buildReadingOrder({ books, stories, placeholders }),
+      hasStories: stories.length > 0
+    })
+  }
+
+  /**
    * DELETE /api/series/:id/placeholders/:placeholderId
    *
    * @param {SeriesControllerRequest} req
@@ -507,6 +592,9 @@ class SeriesController {
    * is editing library metadata, not deleting library content, so it should
    * not require the stronger `canDelete` that `middleware` applies to DELETE.
    *
+   * A series whose only entries are anthology stories the user can see is
+   * accessible too, so its reading order can be shown.
+   *
    * @param {RequestWithUser} req
    * @param {Response} res
    * @param {NextFunction} next
@@ -516,8 +604,9 @@ class SeriesController {
     if (!series) return res.sendStatus(404)
 
     const libraryItems = await libraryItemsBookFilters.getLibraryItemsForSeries(series, req.user)
-    if (!libraryItems.length) {
-      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to access series "${series.id}" with no accessible books`)
+    req.series = series
+    if (!libraryItems.length && !(await getAccessibleStoriesForSeries(req)).length) {
+      Logger.warn(`[SeriesController] User "${req.user.username}" attempted to access series "${series.id}" with no accessible books or stories`)
       return res.sendStatus(404)
     }
 
@@ -526,7 +615,6 @@ class SeriesController {
       return res.sendStatus(403)
     }
 
-    req.series = series
     req.libraryItemsInSeries = libraryItems
     next()
   }

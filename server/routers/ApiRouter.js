@@ -109,6 +109,8 @@ class ApiRouter {
 
     this.router.get('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.findOne.bind(this))
     this.router.delete('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.delete.bind(this))
+    this.router.get('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.getStories.bind(this))
+    this.router.patch('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.updateStories.bind(this))
     this.router.get('/items/:id/download', LibraryItemController.middleware.bind(this), LibraryItemController.download.bind(this))
     this.router.patch('/items/:id/media', LibraryItemController.middleware.bind(this), LibraryItemController.updateMedia.bind(this))
     this.router.get('/items/:id/cover', LibraryItemController.getCover.bind(this))
@@ -240,6 +242,7 @@ class ApiRouter {
     // no POST on ':placeholderId' today so nothing currently shadows it, but
     // adding one later would, and this ordering makes that harmless.
     this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholdersBulk.bind(this))
+    this.router.get('/series/:id/reading-order', SeriesController.placeholderMiddleware.bind(this), SeriesController.getReadingOrder.bind(this))
     this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholderSuggestions.bind(this))
     this.router.post('/series/:id/placeholders/:placeholderId/promote', SeriesController.placeholderMiddleware.bind(this), SeriesController.promotePlaceholder.bind(this))
     this.router.delete('/series/:id/promoted/:libraryItemId', SeriesController.placeholderMiddleware.bind(this), SeriesController.demotePlaceholder.bind(this))
@@ -428,6 +431,9 @@ class ApiRouter {
   /**
    * After deleting book(s), remove empty series
    *
+   * A series that holds anthology stories is not empty, even with no books:
+   * removing it would strip those stories of their series positions.
+   *
    * @param {string[]} seriesIds
    */
   async checkRemoveEmptySeries(seriesIds) {
@@ -441,7 +447,8 @@ class ApiRouter {
             {
               id: seriesIds
             },
-            sequelize.where(sequelize.literal('(SELECT count(*) FROM bookSeries bs WHERE bs.seriesId = series.id)'), 0)
+            sequelize.where(sequelize.literal('(SELECT count(*) FROM bookSeries bs WHERE bs.seriesId = series.id)'), 0),
+            sequelize.where(sequelize.literal('(SELECT count(*) FROM anthologyStories s WHERE s.seriesId = series.id)'), 0)
           ],
           attributes: ['id', 'name', 'libraryId'],
           include: {

@@ -152,6 +152,11 @@ class Database {
     return this.models.seriesPlaceholder
   }
 
+  /** @type {typeof import('./models/AnthologyStory')} */
+  get anthologyStoryModel() {
+    return this.models.anthologyStory
+  }
+
   /** @type {typeof import('./models/CustomMetadataProvider')} */
   get customMetadataProviderModel() {
     return this.models.customMetadataProvider
@@ -338,6 +343,7 @@ class Database {
     require('./models/Series').init(this.sequelize)
     require('./models/BookSeries').init(this.sequelize)
     require('./models/SeriesPlaceholder').init(this.sequelize)
+    require('./models/AnthologyStory').init(this.sequelize)
     require('./models/Author').init(this.sequelize)
     require('./models/BookAuthor').init(this.sequelize)
     require('./models/Collection').init(this.sequelize)
@@ -773,7 +779,8 @@ class Database {
       await collectionBook.destroy()
     }
 
-    // Remove empty series
+    // Remove empty series. A series holding anthology stories is not empty,
+    // even with no books: removing it would strip the stories of their positions.
     const emptySeries = await this.seriesModel.findAll({
       include: {
         model: this.bookSeriesModel,
@@ -781,7 +788,9 @@ class Database {
       },
       where: { '$bookSeries.id$': null }
     })
-    for (const series of emptySeries) {
+    const storiesInEmptySeries = emptySeries.length ? await this.anthologyStoryModel.findAll({ where: { seriesId: emptySeries.map((s) => s.id) }, attributes: ['seriesId'] }) : []
+    const seriesIdsWithStories = new Set(storiesInEmptySeries.map((s) => s.seriesId))
+    for (const series of emptySeries.filter((s) => !seriesIdsWithStories.has(s.id))) {
       Logger.warn(`Found series "${series.name}" with no books - removing it`)
       await series.destroy()
     }
