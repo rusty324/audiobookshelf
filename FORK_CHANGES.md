@@ -39,7 +39,7 @@ What this does and does not mean:
 - **Existing Vue-side fork features stay.** Series reorder, auto-rewind, the listening log, JSON export, organize into folders and series placeholders all keep working in the Vue client. They are no longer maintained there: if an upstream sync breaks one, it is fixed only if the fix is trivial.
 - **Upstream syncs still bring in Vue client changes.** Nothing is deleted from `client/`, so the Vue UI remains available as a fallback.
 
-> ⚠️ **The deployed instance still serves the Vue UI.** The server serves exactly one client: the Vue build by default, or the React client when `REACT_CLIENT_PATH` is set. `docker-compose.yml` builds the Vue client and does not set it, so React-only features are **not visible** until the deployment switches. The React repo's own `Dockerfile` builds a combined server + React image, but it compiles the server with a `build:server` step and `tsconfig.server.json` that this fork's server (last synced at 2.36.0) does not have, so it does not build against this fork as is.
+> ⚠️ **The deployed instance still serves the Vue UI.** The server serves exactly one client: the Vue build by default, or the React client when `REACT_CLIENT_PATH` is set. `docker-compose.yml` builds the Vue client and does not set it, so React-only features are **not visible** until the deployment switches. The React repo's own `Dockerfile` builds a combined server + React image, but it compiles the server with a `build:server` step and `tsconfig.server.json` that this fork's server did not have when this was written (at 2.36.0). The server has since gained both in the 2.37.1 sync, so that build is worth retrying.
 
 Dependabot keeps watching `client/` while the Vue UI is the one deployed, since its dependency security updates still apply to what is running.
 
@@ -243,6 +243,18 @@ Applied after the v2.36.0 sync, which had raised runtime criticals from 1 to 3.
 - `client/components/modals/UploadImageModal.vue` — `fileUploadSelected` used an undefined `file`.
 - `client/components/ui/QueryInput.vue` — `setItem` referenced an undefined `val`.
 - `client/components/ui/MultiSelectQueryInput.vue` — `identifier` was a computed returning `Math.random()` (impure, new value per access); moved to a stable per-instance `data` value.
+
+---
+
+### Fork handlers that could exit the server (review, 2026-11-15)
+
+`server/Server.js` answers any unhandled promise rejection with `process.exit(1)`, and Express 4 does not catch a rejected async route handler. So a throw in a fork handler outside a `try` restarted the whole server. Covered by `test/server/controllers/ForkFixes.test.js`.
+
+- `server/routers/ApiRouter.js` — new `forkRoute()` wrapper turns a thrown error into a logged 500. Applied to the fork's own routes only (organize, stories, placeholders, reading order, playback events, books export), so upstream's lines are untouched for syncing. **New fork routes should use it.**
+- `SeriesController.promotePlaceholder` / `demotePlaceholder` — the work after `transaction.commit()` moved out of the `try`. A throw there reached the `catch`, whose `rollback()` of a finished transaction throws in turn.
+- `LibraryItemController.organize` — the rescan after the move is inside a `try/finally`: a failure answers 500 ("files were moved… scan the library") and always releases the watcher's ignore-dirs. Also refuses, before touching anything, an item with no usable title (the target would have been the author or series folder itself) and a target inside the item's own folder (409 with an explanation rather than a generic 500).
+- `CoverManager.getCoverDirectory` — a promoted placeholder has no folder (`path` is null); with "store covers with item" on, it returned that null. Falls back to the metadata directory.
+- `ApiRouter.handleDeleteLibraryItem` — also deletes the item's listening-log rows, which have no foreign key to the item and were left behind.
 
 ---
 
