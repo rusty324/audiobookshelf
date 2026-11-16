@@ -15,7 +15,9 @@ class CoverManager {
   constructor() {}
 
   getCoverDirectory(libraryItem) {
-    if (global.ServerSettings.storeCoverWithItem && !libraryItem.isFile) {
+    // A promoted series placeholder is a book with no folder (path is null):
+    // its cover can only live in the metadata directory
+    if (global.ServerSettings.storeCoverWithItem && !libraryItem.isFile && libraryItem.path) {
       return libraryItem.path
     } else {
       return Path.posix.join(Path.posix.join(global.MetadataPath, 'items'), libraryItem.id)

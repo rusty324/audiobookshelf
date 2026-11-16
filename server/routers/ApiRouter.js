@@ -36,6 +36,28 @@ const ShareController = require('../controllers/ShareController')
 const StatsController = require('../controllers/StatsController')
 const ApiKeyController = require('../controllers/ApiKeyController')
 
+/**
+ * Fork: wraps a route handler so a throw becomes a 500 response.
+ *
+ * Express 4 does not catch a rejected async handler, and Server.js answers any
+ * unhandled rejection with process.exit(1) - so one unexpected throw in a
+ * handler restarts the whole server. Applied to this fork's own routes only,
+ * which keeps upstream's lines untouched for syncing.
+ *
+ * @param {Function} handler already bound route handler
+ * @returns {Function}
+ */
+function forkRoute(handler) {
+  return async (req, res, next) => {
+    try {
+      await handler(req, res, next)
+    } catch (error) {
+      Logger.error(`[ApiRouter] Unhandled error in ${req.method} ${req.originalUrl}`, error)
+      if (!res.headersSent) res.status(500).send('Internal server error')
+    }
+  }
+}
+
 class ApiRouter {
   constructor(Server) {
     /** @type {import('../Auth')} */
@@ -69,7 +91,7 @@ class ApiRouter {
     this.router.post('/libraries', LibraryController.create.bind(this))
     this.router.get('/libraries', LibraryController.findAll.bind(this))
     // Must precede /libraries/:id, otherwise "books-export" is matched as a library id
-    this.router.get('/libraries/books-export', LibraryController.getBooksExport.bind(this))
+    this.router.get('/libraries/books-export', forkRoute(LibraryController.getBooksExport.bind(this)))
     this.router.get('/libraries/:id', LibraryController.middleware.bind(this), LibraryController.findOne.bind(this))
     this.router.patch('/libraries/:id', LibraryController.middleware.bind(this), LibraryController.update.bind(this))
     this.router.delete('/libraries/:id', LibraryController.middleware.bind(this), LibraryController.delete.bind(this))
@@ -109,8 +131,8 @@ class ApiRouter {
 
     this.router.get('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.findOne.bind(this))
     this.router.delete('/items/:id', LibraryItemController.middleware.bind(this), LibraryItemController.delete.bind(this))
-    this.router.get('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.getStories.bind(this))
-    this.router.patch('/items/:id/stories', LibraryItemController.middleware.bind(this), LibraryItemController.updateStories.bind(this))
+    this.router.get('/items/:id/stories', LibraryItemController.middleware.bind(this), forkRoute(LibraryItemController.getStories.bind(this)))
+    this.router.patch('/items/:id/stories', LibraryItemController.middleware.bind(this), forkRoute(LibraryItemController.updateStories.bind(this)))
     this.router.get('/items/:id/download', LibraryItemController.middleware.bind(this), LibraryItemController.download.bind(this))
     this.router.patch('/items/:id/media', LibraryItemController.middleware.bind(this), LibraryItemController.updateMedia.bind(this))
     this.router.get('/items/:id/cover', LibraryItemController.getCover.bind(this))
@@ -122,7 +144,7 @@ class ApiRouter {
     this.router.post('/items/:id/play/:episodeId', LibraryItemController.middleware.bind(this), LibraryItemController.startEpisodePlaybackSession.bind(this))
     this.router.patch('/items/:id/tracks', LibraryItemController.middleware.bind(this), LibraryItemController.updateTracks.bind(this))
     this.router.post('/items/:id/scan', LibraryItemController.middleware.bind(this), LibraryItemController.scan.bind(this))
-    this.router.post('/items/:id/organize', LibraryItemController.middleware.bind(this), LibraryItemController.organize.bind(this))
+    this.router.post('/items/:id/organize', LibraryItemController.middleware.bind(this), forkRoute(LibraryItemController.organize.bind(this)))
     this.router.get('/items/:id/metadata-object', LibraryItemController.middleware.bind(this), LibraryItemController.getMetadataObject.bind(this))
     this.router.post('/items/:id/chapters', LibraryItemController.middleware.bind(this), LibraryItemController.updateMediaChapters.bind(this))
     this.router.get('/items/:id/ffprobe/:fileid', LibraryItemController.middleware.bind(this), LibraryItemController.getFFprobeData.bind(this))
@@ -183,7 +205,7 @@ class ApiRouter {
     this.router.get('/me/bookmarks/:libraryItemId', MeController.getBookmarksForLibraryItem.bind(this))
     this.router.get('/me/listening-sessions', MeController.getListeningSessions.bind(this))
     this.router.get('/me/item/listening-sessions/:libraryItemId/:episodeId?', MeController.getItemListeningSessions.bind(this))
-    this.router.get('/me/item/:libraryItemId/playback-events', MeController.getItemPlaybackEvents.bind(this))
+    this.router.get('/me/item/:libraryItemId/playback-events', forkRoute(MeController.getItemPlaybackEvents.bind(this)))
     this.router.get('/me/listening-stats', MeController.getListeningStats.bind(this))
     this.router.get('/me/progress/:id/remove-from-continue-listening', MeController.removeItemFromContinueListening.bind(this))
     this.router.get('/me/progress/:id/:episodeId?', MeController.getMediaProgress.bind(this))
@@ -236,18 +258,18 @@ class ApiRouter {
     // Placeholders use their own middleware: same access check, but mutations
     // need only canUpdate rather than canDelete. No ordering hazard against
     // '/series/:id' above, since these paths have an extra segment.
-    this.router.get('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholders.bind(this))
-    this.router.post('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholder.bind(this))
+    this.router.get('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.getPlaceholders.bind(this)))
+    this.router.post('/series/:id/placeholders', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.createPlaceholder.bind(this)))
     // 'bulk' is registered ahead of the ':placeholderId' routes below. There is
     // no POST on ':placeholderId' today so nothing currently shadows it, but
     // adding one later would, and this ordering makes that harmless.
-    this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), SeriesController.createPlaceholdersBulk.bind(this))
-    this.router.get('/series/:id/reading-order', SeriesController.placeholderMiddleware.bind(this), SeriesController.getReadingOrder.bind(this))
-    this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), SeriesController.getPlaceholderSuggestions.bind(this))
-    this.router.post('/series/:id/placeholders/:placeholderId/promote', SeriesController.placeholderMiddleware.bind(this), SeriesController.promotePlaceholder.bind(this))
-    this.router.delete('/series/:id/promoted/:libraryItemId', SeriesController.placeholderMiddleware.bind(this), SeriesController.demotePlaceholder.bind(this))
-    this.router.patch('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.updatePlaceholder.bind(this))
-    this.router.delete('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), SeriesController.deletePlaceholder.bind(this))
+    this.router.post('/series/:id/placeholders/bulk', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.createPlaceholdersBulk.bind(this)))
+    this.router.get('/series/:id/reading-order', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.getReadingOrder.bind(this)))
+    this.router.get('/series/:id/placeholder-suggestions', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.getPlaceholderSuggestions.bind(this)))
+    this.router.post('/series/:id/placeholders/:placeholderId/promote', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.promotePlaceholder.bind(this)))
+    this.router.delete('/series/:id/promoted/:libraryItemId', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.demotePlaceholder.bind(this)))
+    this.router.patch('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.updatePlaceholder.bind(this)))
+    this.router.delete('/series/:id/placeholders/:placeholderId', SeriesController.placeholderMiddleware.bind(this), forkRoute(SeriesController.deletePlaceholder.bind(this)))
 
     //
     // Playback Session Routes
@@ -261,7 +283,7 @@ class ApiRouter {
     // TODO: Update these endpoints because they are only for open playback sessions
     this.router.get('/session/:id', SessionController.openSessionMiddleware.bind(this), SessionController.getOpenSession.bind(this))
     this.router.post('/session/:id/sync', SessionController.openSessionMiddleware.bind(this), SessionController.sync.bind(this))
-    this.router.post('/session/:id/events', SessionController.openSessionMiddleware.bind(this), SessionController.recordEvents.bind(this))
+    this.router.post('/session/:id/events', SessionController.openSessionMiddleware.bind(this), forkRoute(SessionController.recordEvents.bind(this)))
     this.router.post('/session/:id/close', SessionController.openSessionMiddleware.bind(this), SessionController.close.bind(this))
 
     //
@@ -400,6 +422,12 @@ class ApiRouter {
     })
     if (numProgressRemoved > 0) {
       Logger.info(`[ApiRouter] Removed ${numProgressRemoved} media progress entries for library item "${libraryItemId}"`)
+    }
+
+    // Fork: the listening log has no foreign key to the library item, so its
+    // rows for a deleted item would otherwise stay forever
+    if (Database.playbackEventModel) {
+      await Database.playbackEventModel.destroy({ where: { libraryItemId } })
     }
 
     // remove item from playlists
@@ -605,3 +633,5 @@ class ApiRouter {
   }
 }
 module.exports = ApiRouter
+// Exposed for test/server/controllers/ForkFixes.test.js
+module.exports.forkRoute = forkRoute

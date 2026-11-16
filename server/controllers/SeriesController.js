@@ -386,6 +386,7 @@ class SeriesController {
       return res.status(409).send('A book matching this placeholder is already in the library')
     }
 
+    let libraryItemId = null
     const transaction = await Database.sequelize.transaction()
     try {
       const book = await Database.bookModel.create(
@@ -433,20 +434,26 @@ class SeriesController {
 
       await placeholder.destroy({ transaction })
       await transaction.commit()
-
-      Logger.info(`[SeriesController] Promoted placeholder "${placeholder.title}" to a library item in series "${req.series.name}"`)
-
-      // Same event the scanner emits for a new item, so open bookshelves pick
-      // it up without a reload
-      const expanded = await Database.libraryItemModel.getExpandedById(libraryItem.id)
-      if (expanded) SocketAuthority.libraryItemEmitter('item_added', expanded)
-
-      res.json({ libraryItemId: libraryItem.id })
+      libraryItemId = libraryItem.id
     } catch (error) {
       await transaction.rollback()
       Logger.error(`[SeriesController] Failed to promote placeholder: ${error.message}`)
-      res.status(500).send('Failed to promote placeholder')
+      return res.status(500).send('Failed to promote placeholder')
     }
+
+    // Past the commit, on purpose outside the try above: a throw in here used
+    // to reach that catch, whose rollback() of a finished transaction throws
+    // in turn - an unhandled rejection, which exits the server (Server.js).
+    Logger.info(`[SeriesController] Promoted placeholder "${placeholder.title}" to a library item in series "${req.series.name}"`)
+    try {
+      // Same event the scanner emits for a new item, so open bookshelves pick
+      // it up without a reload
+      const expanded = await Database.libraryItemModel.getExpandedById(libraryItemId)
+      if (expanded) SocketAuthority.libraryItemEmitter('item_added', expanded)
+    } catch (error) {
+      Logger.warn(`[SeriesController] Promoted placeholder but failed to announce it: ${error.message}`)
+    }
+    res.json({ libraryItemId })
   }
 
   /**
@@ -495,15 +502,20 @@ class SeriesController {
       await libraryItem.destroy({ transaction })
       await Database.bookModel.destroy({ where: { id: libraryItem.mediaId }, transaction })
       await transaction.commit()
-
-      Logger.info(`[SeriesController] Demoted "${libraryItem.title}" back to a placeholder`)
-      SocketAuthority.libraryItemEmitter('item_removed', libraryItem)
-      res.sendStatus(200)
     } catch (error) {
       await transaction.rollback()
       Logger.error(`[SeriesController] Failed to demote placeholder: ${error.message}`)
-      res.status(500).send('Failed to demote placeholder')
+      return res.status(500).send('Failed to demote placeholder')
     }
+
+    // Outside the try: see promotePlaceholder
+    Logger.info(`[SeriesController] Demoted "${libraryItem.title}" back to a placeholder`)
+    try {
+      SocketAuthority.libraryItemEmitter('item_removed', libraryItem)
+    } catch (error) {
+      Logger.warn(`[SeriesController] Demoted placeholder but failed to announce it: ${error.message}`)
+    }
+    res.sendStatus(200)
   }
 
   /**

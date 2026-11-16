@@ -932,6 +932,14 @@ class LibraryItemController {
       title: book.title
     })
     const cleanedParts = relParts.filter(Boolean).map((part) => sanitizeFilename(part))
+    // The last part is the book's own folder. A title that is empty, or that
+    // sanitizes away to nothing, would drop out and leave the author or series
+    // folder as the target - moving this book to be that whole folder.
+    const titlePart = cleanedParts[cleanedParts.length - 1]
+    if (!(book.title || '').trim() || !titlePart) {
+      Logger.error(`[LibraryItemController] organize: "${req.libraryItem.id}" has no usable title to name its folder`)
+      return res.status(400).send('This item needs a title before it can be organized')
+    }
     if (!cleanedParts.length) {
       Logger.error(`[LibraryItemController] organize: Could not build a target path for "${book.title}" (missing author/series/title)`)
       return res.status(400).send('Not enough metadata to organize this item')
@@ -966,6 +974,13 @@ class LibraryItemController {
       return res.status(409).send('A file or folder already exists at the target location')
     }
 
+    // A book that currently IS the author (or series) folder would be moved
+    // into itself, which the filesystem refuses with an unhelpful error
+    if (!isFile && isSameOrSubPath(oldPath, newPath)) {
+      Logger.error(`[LibraryItemController] organize: Target "${newPath}" is inside the item's current folder "${oldPath}"`)
+      return res.status(409).send("The target folder is inside this item's current folder. Move its files into a folder of their own first")
+    }
+
     const oldParentDir = filePathToPOSIX(Path.dirname(oldPath))
 
     Logger.info(`[LibraryItemController] organize: Moving "${oldPath}" to "${isFile ? destFilePath : newPath}"`)
@@ -985,24 +1000,36 @@ class LibraryItemController {
       return res.status(500).send('Failed to move files')
     }
 
-    // Best-effort cleanup of now-empty old parent directories (never above the library folder)
-    await removeEmptyParentDirs(oldParentDir, folderPath)
+    // The files have moved. Whatever happens from here on must not go
+    // unhandled: an unhandled rejection exits the server (Server.js), and it
+    // would do so with the database still pointing at the old location and
+    // the watcher still ignoring both folders.
+    let result = null
+    let libraryItem = null
+    try {
+      // Best-effort cleanup of now-empty old parent directories (never above the library folder)
+      await removeEmptyParentDirs(oldParentDir, folderPath)
 
-    // Re-sync the database record and all file/media paths from the new location
-    const result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id, {
-      path: newPath,
-      relPath: newRelPath,
-      libraryFolderId: folder.id,
-      isFile: false
-    })
-    await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
+      // Re-sync the database record and all file/media paths from the new location
+      result = await LibraryItemScanner.scanLibraryItem(req.libraryItem.id, {
+        path: newPath,
+        relPath: newRelPath,
+        libraryFolderId: folder.id,
+        isFile: false
+      })
 
-    Watcher.removeIgnoreDir(oldPath)
-    Watcher.removeIgnoreDir(newPath)
+      await Database.resetLibraryIssuesFilterData(req.libraryItem.libraryId)
 
-    const libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
-    if (libraryItem) {
-      SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+      libraryItem = await Database.libraryItemModel.getExpandedById(req.libraryItem.id)
+      if (libraryItem) {
+        SocketAuthority.libraryItemEmitter('item_updated', libraryItem)
+      }
+    } catch (error) {
+      Logger.error(`[LibraryItemController] organize: Moved "${book.title}" to "${newPath}" but failed to re-sync it`, error)
+      return res.status(500).send('The files were moved, but updating the library failed. Scan the library to pick up the new location')
+    } finally {
+      Watcher.removeIgnoreDir(oldPath)
+      Watcher.removeIgnoreDir(newPath)
     }
 
     res.json({
